@@ -201,6 +201,17 @@ Read-only. Concord never holds keys or moves money.
 Transfer agents, custodians and fund administrators serving issuers on Stellar. Priced as
 software: per asset and per seat.
 
+## Contributing
+
+Contributions are welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup and the
+rules that matter, and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for how the code fits
+together. Report security problems privately, as described in [`SECURITY.md`](./SECURITY.md).
+Everyone taking part is expected to follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
+## License
+
+[MIT](./LICENSE).
+
 ## Relationship to other projects
 
 Concord is a stand-alone company. It was split from the Ballast idea set on 2026-09-16 because
