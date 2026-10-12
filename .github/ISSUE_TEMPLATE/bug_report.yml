@@ -1,0 +1,59 @@
+name: Bug report
+description: Something is wrong or reconciles incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste real holder names, addresses tied to real people, or credentials. Remove them first.
+        For security problems, use the private reporting link on the issue chooser instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: For a wrong figure, the smallest register, journal or event sequence that shows it is the most useful thing you can give us.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Reconciliation (positions, movements)
+        - Corporate actions
+        - Controls log
+        - Indexer / Stellar RPC or Horizon
+        - Accounts and workspaces
+        - Dashboard
+        - CLI
+        - Deployment
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: network
+    attributes:
+      label: Network and asset
+      description: mainnet or testnet, and the asset (CODE:ISSUER or contract id) if it is public.
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: output of `git rev-parse --short HEAD`
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: Node version, OS, and whether you run Docker.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      render: shell
