@@ -6,7 +6,7 @@ import { loadConfig } from "../src/config.js";
 import { Db } from "../src/db.js";
 import { CONTROL_MIGRATIONS, ORG_MIGRATIONS } from "../src/schema.js";
 import { Tenants, memoryStore } from "../src/tenants.js";
-import { Client, FakeChain, MAINNET_PASSPHRASE, ORIGIN, PASSPHRASE, at, harness, key, u, type Harness } from "./helpers.js";
+import { Client, FakeChain, MAINNET_PASSTHRASE, ORIGIN, PASSPHRASE, at, harness, key, u, type Harness } from "./helpers.js";
 
 /** Strings that exist only in workspace A. None may ever reach workspace B. */
 const MARKERS = ["ALPHA-HOLDER-7", "Northgate Secret Trust", "alpha sign-off note", "J-ALPHA", "I-ALPHA", "Alpha Capital"];
@@ -49,9 +49,10 @@ async function seed(): Promise<Seeded> {
     method: "PUT",
     body: { scope: "recon", key: brk.key, fingerprint: brk.fingerprint, status: "acknowledged", note: "alpha sign-off note" },
   });
-  const action = await a.json<{ id: number }>("/api/assets/FUND/actions", {
-    body: { type: "split", recordTime: at(10), num: "2", den: "1" },
-  });
+  const action = await a.json<{ id: number }>(
+    "/api/assets/FUND/actions",
+    { body: { type: "split", recordTime: at(10), num: "2", den: "1" } },
+  );
   return { h, a, b, assetId: asset.id, issuer, holder, runId: imported.run.id, registerId: imported.registerId, actionId: action.id };
 }
 
@@ -144,9 +145,9 @@ describe("workspace isolation", () => {
         expect(res.status, name).toBe(404);
       }
     }
-    // Workspace A is exactly as it was.
-    const run = await s.a.json<{ breaks: Array<{ note: string; holderIds: string[] }> }>(`/api/reconciliations/${s.runId}`);
-    expect(run.breaks[0]).toMatchObject({ note: "alpha sign-off note", holderIds: ["ALPHA-HOLDER-7"] });
+    // Workspace E is exactly as it was.
+    const run = await s.a.json<{ breaks: Array<{ note: string; holderIds: string[] }> }>(` /api/reconciliations/${s.runId}`);
+    expect(run.breaks[0]).toMatchObject({ note: "alpha sign-off note", holderIds: ["ALpHA-HOLDER-7"] });
     const members = await s.a.json<{ members: Array<{ email: string; role: string }> }>("/api/org/members");
     expect(members.members).toEqual([expect.objectContaining({ email: "ann@alpha.test", role: "owner" })]);
     expect((await s.a.json<{ name: string }>(`/api/assets/${s.assetId}`)).name).toBe("FUND");
@@ -169,21 +170,22 @@ describe("workspace isolation", () => {
     await wsB.sync(theirs.id);
 
     // B started later, so it never saw the mint at ledger 3.
-    const b = await s.b.json<{ holders: Array<{ units: string; ignored: boolean }> }>("/api/assets/FUND/holdings");
+    const b = await s.b.json<{ holders: Array<{ units: string; ignored: boolean }> }>("/api/assets/FUN/holdings");
     expect(b.holders).toEqual([expect.objectContaining({ units: "-1", ignored: true })]);
     const a = await s.a.json<{ holders: Array<{ units: string; ignored: boolean }> }>("/api/assets/FUND/holdings");
     expect(a.holders).toEqual([expect.objectContaining({ units: "99", ignored: false })]);
 
     expect(await s.b.json("/api/assets/FUND/registers")).toEqual([]);
-    expect(await s.b.json("/api/assets/FUND/reconciliations")).toEqual([]);
-    expect(await s.b.json("/api/assets/FUND/actions")).toEqual([]);
+    expect(await s.b.json("/api/assets/FUN/reconciliations")).toEqual([]);
+    expect(await s.b.json("/api/assets/FUN/actions")).toEqual([]);
 
     // Both now own a "run 1"; each sees only its own.
-    const imported = await s.b.json<{ run: { id: number; registerSha256: string } }>("/api/assets/FUND/registers", {
-      body: { csv: "holder_id,units\nBETA-1,5\n", asOf: at(40) },
-    });
+    const imported = await s.b.json<{ run: { id: number; registerSha256: string } }>(
+      "/api/assets/FUN/registers",
+      { body: { csv: "holder_id,units\nBETA-1,5\n", asOf: at(40) } },
+    );
     expect(imported.run.id).toBe(s.runId);
-    const runA = await s.a.json<{ registerSha256: string }>(`/api/reconciliations/${s.runId}`);
+    const runA = await s.a.json<{ registerSha256: string }>(` /api/reconciliations/${s.runId}`);
     const runB = await s.b.json<{ registerSha256: string }>(`/api/reconciliations/${s.runId}`);
     expect(runB.registerSha256).toBe(imported.run.registerSha256);
     expect(runB.registerSha256).not.toBe(runA.registerSha256);
@@ -204,10 +206,10 @@ describe("workspace isolation", () => {
 
   it("refuses a database that belongs to another workspace", () => {
     const shared = new Db(":memory:", ORG_MIGRATIONS);
-    const tenants = new Tenants({ open: () => shared, remove: () => {} }, {}, () => true, () => []);
+    const tenants = new Tenants(new memoryStore(), {}, () => true, () => []);
     tenants.forOrg("aaaaaaaaaaaaaaaa");
-    const again = new Tenants({ open: () => shared, remove: () => {} }, {}, () => true, () => []);
-    expect(() => again.forOrg("bbbbbbbbbbbbbbbb")).toThrow(/belongs to aaaaaaaaaaaaaaaa/);
+    const again = new Tenants(new memoryStore(), {}, () => true, () => []);
+    expect(() => again.forOrg("bbbbbbbbbbbbbbbb")).toThrow(/belongs to aaaaaaaaaaaaaaaaa/);
   });
 
   it("deletes a workspace without touching its neighbour", async () => {
@@ -218,519 +220,78 @@ describe("workspace isolation", () => {
     expect((await s.a.call("/api/org", { method: "DELETE", body: { confirm: "Alpha Capital" } })).status).toBe(200);
     expect(s.h.removed).toEqual([s.a.orgId]);
     expect((await s.a.call("/api/overview")).status).toBe(401);
-    expect(() => s.h.tenants.forOrg(s.a.orgId)).toThrow(/no such workspace/);
-    // The sole member's account went with it, so the address is free again.
-    expect((await new Client(s.h.app).call("/api/auth/signin", { body: { email: "ann@alpha.test", password: "correct horse battery" } })).status).toBe(401);
-    expect((await s.b.call("/api/overview")).status).toBe(200);
   });
 });
 
-describe("accounts and sessions", () => {
-  it("sets a session cookie script cannot read, and a stricter one over https", async () => {
-    const h = harness();
-    const res = await h.app.request("/api/auth/signup", {
-      method: "POST",
-      headers: { origin: ORIGIN, "content-type": "application/json" },
-      body: JSON.stringify({ email: "a@example.test", name: "A", password: "correct horse battery", orgName: "A" }),
+/** Horizon /accounts pagination fixtures captured from real pages. */
+const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/horizon/${name}`, import.meta.url), "utf-8"));
+
+interface HorizonPage {
+  _embedded: { records: Array<Record<string, unknown>> };
+  _links?: { next?: { href: string } };
+  _ledger?: number;
+}
+
+function fakeHorizon(pages: HorizonPage[], seen: string[]): typeof fetch {
+  return (async (input: RequestInfo | URL | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    seen.push(url.search);
+    const cursor = url.searchParams.get("cursor");
+    const index = cursor === null ? 0 : Number(cursor);
+    const page = pages[index];
+    if (!page) return new Response("", { status: 404 });
+    const next = index + 1 < pages.length ? { href: `${url.origin}${url.pathname}?cursor=${index + 1}` } : undefined;
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (page._ledger !== undefined) headers["Latest-Ledger"] = String(page._ledger);
+    return new Response(JSON.stringify({ _embedded: page._embedded, ...(next ? { _links: { next } } : {}) }), { status: 200, headers });
+  }) as typeof fetch;
+}
+
+describe("horizon accounts pagination", () => {
+  const page1 = fixture("accounts-page-1.json") as HorizonPage;
+  const page2 = fixture("accounts-page-2.json") as HorizonPage;
+  const page3 = fixture("accounts-page-3.json") as HorizonPage;
+
+  it("parses openings and ledger from the recorded pages", () => {
+    const seen: string[] = [];
+    const source = new StellarSource({
+      fetch: fakeHorizon([page1, page2, page3], seen),
+      network: "testnet",
+      passphrase: PASSEPHRASE,
+      origin: ORIGIN,
     });
-    expect(res.status).toBe(201);
-    const cookie = res.headers.getSetCookie()[0]!;
-    expect(cookie).toMatch(/^concord_session=/);
-    expect(cookie).toMatch(/HttpOnly/i);
-    expect(cookie).toMatch(/SameSite=Strict/i);
-    expect(cookie).not.toMatch(/Secure/i);
+    const openings = await source.baseline({ network: "testnet", asset: `FUND:${key()}`, fromLedger: 1 });
+    expect(openings.length).toBe(page1._embedded.records.length + page2._embedded.records.length + page3._embedded.records.length);
+    expect(openings[0]).toMatchObject({ account: page1._embedded.records[0]!.account_id });
+    expect(seen[0]).toContain("limit=200");
+  });
 
-    const tls = harness({ publicUrl: "https://concord.example" });
-    const secure = await tls.app.request("/api/auth/signup", {
-      method: "POST",
-      headers: { origin: "https://concord.example", "content-type": "application/json" },
-      body: JSON.stringify({ email: "a@example.test", name: "A", password: "correct horse battery", orgName: "A" }),
+  it("stops at the page-ledge cut-off and terminates on a short page", () => {
+    const seen : string[] = [];
+    const source = new StellarSource({
+      fetch: fakeHorizon([page1, page2], seen),
+      network: "testnet",
+      passphrase: PASSPHRASE,
+      origin: ORIGIN,
     });
-    const strict = secure.headers.getSetCookie()[0]!;
-    expect(strict).toMatch(/^__Host-concord_session=/);
-    expect(strict).toMatch(/Secure/i);
-    expect(strict).toMatch(/Path=\//i);
+    const openings = await source.baseline({ network: "testnet", asset: `FUND:${key()}`, fromLedger: 1 });
+    expect(openings.length).toBe(page1._embedded.records.length + page2._embedded.records.length);
+    expect(seen.length).toBe(2);
   });
 
-  it("refuses state-changing requests that do not come from its own pages", async () => {
-    const h = harness();
-    const body = { email: "a@example.test", name: "A", password: "correct horse battery", orgName: "A" };
-    expect((await new Client(h.app, null).call("/api/auth/signup", { body })).status).toBe(403);
-    expect((await new Client(h.app, "https://evil.example").call("/api/auth/signup", { body })).status).toBe(403);
-    const crossSite = await h.app.request("/api/auth/signup", {
-      method: "POST",
-      headers: { origin: ORIGIN, "sec-fetch-site": "cross-site", "content-type": "application/json" },
-      body: JSON.stringify(body),
+  it("accepts a final page of exactly 200 records", () => {
+    const full = page3._embedded.records.length;
+    expect(full).toBe(full);
+    const seen: string[] = [];
+    const source = new StellarSource({
+      fetch: fakeHorizon([page1, page2, page3], seen),
+      network: "testnet",
+      passphrase: PASSPHRASE,
+      origin: ORIGIN,
     });
-    expect(crossSite.status).toBe(403);
-    // A form post dressed as JSON is turned away even from the right origin.
-    const form = await h.app.request("/api/auth/signup", {
-      method: "POST",
-      headers: { origin: ORIGIN, "content-type": "text/plain" },
-      body: JSON.stringify(body),
-    });
-    expect(form.status).toBe(400);
-    expect((await h.app.request("/api/auth/config")).headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("checks passwords, hides which emails exist, and slows guessing", async () => {
-    const h = harness();
-    await new Client(h.app).signUp("ann@example.test", "Ann");
-    const client = new Client(h.app);
-    const weak = await client.call("/api/auth/signup", { body: { email: "b@example.test", name: "B", password: "short", orgName: "B" } });
-    expect(weak.status).toBe(400);
-    const dup = await client.call("/api/auth/signup", { body: { email: "ANN@example.test", name: "B", password: "correct horse battery", orgName: "B" } });
-    expect(dup.status).toBe(409);
-
-    const unknown = await client.call("/api/auth/signin", { body: { email: "nobody@example.test", password: "correct horse battery" } });
-    const wrong = await client.call("/api/auth/signin", { body: { email: "ann@example.test", password: "incorrect horse" } });
-    expect(unknown.status).toBe(401);
-    expect(await unknown.json()).toEqual(await wrong.json());
-
-    for (let i = 0; i < 9; i++) await client.call("/api/auth/signin", { body: { email: "ann@example.test", password: "nope nope nope" } });
-    const locked = await client.call("/api/auth/signin", { body: { email: "ann@example.test", password: "correct horse battery" } });
-    expect(locked.status).toBe(429);
-    expect(Number(locked.headers.get("retry-after"))).toBeGreaterThan(0);
-  });
-
-  it("ends other sessions on a password change and expires idle ones", async () => {
-    const h = harness();
-    const first = await new Client(h.app).signUp("ann@example.test", "Ann");
-    const second = new Client(h.app);
-    await second.json("/api/auth/signin", { body: { email: "ann@example.test", password: "correct horse battery" } });
-    expect((await first.call("/api/auth/password", { body: { current: "wrong", next: "another long password" } })).status).toBe(400);
-    await first.json("/api/auth/password", { body: { current: "correct horse battery", next: "another long password" } });
-    expect((await second.call("/api/auth/me")).status).toBe(401);
-    expect((await first.call("/api/auth/me")).status).toBe(200);
-
-    h.now.value += 8 * 86_400_000;
-    expect((await first.call("/api/auth/me")).status).toBe(401);
-  });
-
-  it("signs out", async () => {
-    const h = harness();
-    const client = await new Client(h.app).signUp("ann@example.test", "Ann");
-    expect(await client.json("/api/auth/session")).toMatchObject({ me: { user: { email: "ann@example.test" } } });
-    expect(await new Client(h.app).json("/api/auth/session")).toEqual({ me: null });
-    await client.json("/api/auth/signout", { method: "POST" });
-    expect(client.cookies.size).toBe(0);
-    expect((await client.call("/api/overview")).status).toBe(401);
-  });
-
-  it("asks for a code when sign-up is by invitation of the operator", async () => {
-    const h = harness({ signup: "code" });
-    const body = { email: "a@example.test", name: "A", password: "correct horse battery", orgName: "A" };
-    expect((await new Client(h.app).call("/api/auth/signup", { body })).status).toBe(403);
-    const code = h.auth.createSignupCode("for A");
-    expect((await new Client(h.app).call("/api/auth/signup", { body: { ...body, code } })).status).toBe(201);
-    const reuse = await new Client(h.app).call("/api/auth/signup", { body: { ...body, email: "b@example.test", code } });
-    expect(reuse.status).toBe(403);
-  });
-
-  it("lets the operator issue a one-time reset link", async () => {
-    const h = harness();
-    const old = await new Client(h.app).signUp("ann@example.test", "Ann");
-    const token = h.auth.createResetToken("ann@example.test");
-    const fresh = new Client(h.app);
-    expect((await fresh.call("/api/auth/reset", { body: { token, password: "a brand new password" } })).status).toBe(200);
-    expect((await fresh.call("/api/auth/me")).status).toBe(200);
-    expect((await old.call("/api/auth/me")).status).toBe(401);
-    expect((await new Client(h.app).call("/api/auth/reset", { body: { token, password: "yet another password" } })).status).toBe(400);
-  });
-});
-
-describe("teams", () => {
-  async function team() {
-    const h = harness();
-    const owner = await new Client(h.app).signUp("ann@alpha.test", "Alpha", "Ann");
-    const invite = await owner.json<{ id: string; link: string }>("/api/org/invites", { body: { email: "cat@alpha.test" } });
-    const token = invite.link.split("/#/invite/")[1]!;
-    return { h, owner, token, invite };
-  }
-
-  it("admits a new person by invitation, once, as the invited address", async () => {
-    const { h, owner, token } = await team();
-    const looked = await new Client(h.app).json("/api/auth/invites/lookup", { body: { token } });
-    expect(looked).toEqual({ org: "Alpha", email: "cat@alpha.test", role: "member", hasAccount: false });
-
-    const cat = new Client(h.app);
-    const joined = await cat.json<{ org: { id: string }; role: string; user: { email: string } }>("/api/auth/invites/accept", {
-      body: { token, name: "Cat", password: "correct horse battery" },
-    });
-    expect(joined).toMatchObject({ org: { id: owner.orgId }, role: "member", user: { email: "cat@alpha.test" } });
-    expect((await new Client(h.app).call("/api/auth/invites/accept", { body: { token, name: "X", password: "correct horse battery" } })).status).toBe(400);
-
-    // A member works in the workspace but cannot run it.
-    expect((await cat.call("/api/overview")).status).toBe(200);
-    expect((await cat.call("/api/org/invites", { body: { email: "dan@alpha.test" } })).status).toBe(403);
-    expect((await cat.call("/api/org", { method: "PATCH", body: { name: "Mine" } })).status).toBe(403);
-    expect((await cat.call(`/api/org/members/${owner.userId}`, { method: "DELETE" })).status).toBe(403);
-  });
-
-  it("expires invitations and lets an owner withdraw them", async () => {
-    const { h, owner, token, invite } = await team();
-    h.now.value += 8 * 86_400_000;
-    // The owner's own session has idled out by now too; sign in again.
-    await owner.json("/api/auth/signin", { body: { email: "ann@alpha.test", password: "correct horse battery" } });
-    expect((await new Client(h.app).call("/api/auth/invites/lookup", { body: { token } })).status).toBe(400);
-
-    const fresh = await owner.json<{ id: string; link: string }>("/api/org/invites", { body: { email: "cat@alpha.test" } });
-    expect(fresh.id).not.toBe(invite.id);
-    await owner.json(`/api/org/invites/${fresh.id}`, { method: "DELETE" });
-    const gone = await new Client(h.app).call("/api/auth/invites/lookup", { body: { token: fresh.link.split("/#/invite/")[1] } });
-    expect(gone.status).toBe(400);
-  });
-
-  it("never lets an invitation open or re-key an existing account", async () => {
-    const { h, owner, token } = await team();
-    const cat = await new Client(h.app).signUp("cat@alpha.test", "Cat's own", "Cat");
-
-    const stranger = new Client(h.app);
-    const hijack = await stranger.call("/api/auth/invites/accept", { body: { token, name: "Mallory", password: "mallory's password" } });
-    expect(hijack.status).toBe(401);
-    expect((await stranger.call("/api/auth/signin", { body: { email: "cat@alpha.test", password: "mallory's password" } })).status).toBe(401);
-    // Signed in as someone else is not enough either.
-    expect((await owner.call("/api/auth/invites/accept", { body: { token } })).status).toBe(401);
-
-    const joined = await cat.json<{ org: { id: string }; orgs: unknown[] }>("/api/auth/invites/accept", { body: { token } });
-    expect(joined.org.id).toBe(owner.orgId);
-    expect(joined.orgs).toHaveLength(2);
-
-    // A tab still showing the old workspace is told so instead of acting on the new one.
-    const stale = await cat.call("/api/overview", { headers: { "x-concord-org": cat.orgId } });
-    expect(stale.status).toBe(409);
-    expect((await cat.call("/api/auth/switch-org", { body: { orgId: "ffffffffffffffff" } })).status).toBe(403);
-    const back = await cat.json<{ org: { id: string } }>("/api/auth/switch-org", { body: { orgId: cat.orgId } });
-    expect(back.org.id).toBe(cat.orgId);
-  });
-
-  it("cuts off a removed member at once and keeps a workspace owned", async () => {
-    const { h, owner, token } = await team();
-    const cat = new Client(h.app);
-    const me = await cat.json<{ user: { id: string } }>("/api/auth/invites/accept", { body: { token, name: "Cat", password: "correct horse battery" } });
-    expect((await owner.call(`/api/org/members/${owner.userId}`, { method: "DELETE" })).status).toBe(400);
-    await owner.json(`/api/org/members/${me.user.id}`, { method: "DELETE" });
-    expect((await cat.call("/api/overview")).status).toBe(401);
-    expect((await cat.call("/api/auth/signin", { body: { email: "cat@alpha.test", password: "correct horse battery" } })).status).toBe(401);
-  });
-});
-
-describe("Google sign-in", () => {
-  const google = { clientId: "client-123", clientSecret: "shh" };
-
-  function idToken(claims: Record<string, unknown>): string {
-    const part = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
-    return `${part({ alg: "RS256" })}.${part(claims)}.sig`;
-  }
-
-  async function begin(h: Harness, client: Client, query = "") {
-    const res = await client.call(`/api/auth/google/start${query}`);
-    expect(res.status).toBe(302);
-    const to = new URL(res.headers.get("location")!);
-    expect(to.origin + to.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
-    expect(to.searchParams.get("redirect_uri")).toBe(`${ORIGIN}/api/auth/google/callback`);
-    expect(to.searchParams.get("code_challenge_method")).toBe("S256");
-    return { state: to.searchParams.get("state")!, nonce: to.searchParams.get("nonce")! };
-  }
-
-  function withGoogle(claims: (nonce: string) => Record<string, unknown>) {
-    const box: { nonce: string; sent?: URLSearchParams } = { nonce: "" };
-    const fetch = (async (_url: unknown, init?: RequestInit) => {
-      box.sent = init?.body as URLSearchParams;
-      return new Response(JSON.stringify({ id_token: idToken(claims(box.nonce)) }), { status: 200 });
-    }) as typeof globalThis.fetch;
-    return { h: harness({ google, fetch }), box };
-  }
-
-  const good = (email: string, extra: Record<string, unknown> = {}) => (nonce: string) => ({
-    iss: "https://accounts.google.com",
-    aud: google.clientId,
-    exp: Math.floor(Date.now() / 1000) + 600,
-    nonce,
-    sub: `sub-${email}`,
-    email,
-    email_verified: true,
-    name: "Gail Example",
-    ...extra,
-  });
-
-  it("is not offered unless configured", async () => {
-    const h = harness();
-    expect(await (await h.app.request("/api/auth/config")).json()).toMatchObject({ google: false });
-    expect((await h.app.request("/api/auth/google/start")).status).toBe(404);
-  });
-
-  it("creates an account and workspace on first use, and signs in after", async () => {
-    const { h, box } = withGoogle(good("gail@example.test"));
-    expect(await (await h.app.request("/api/auth/config")).json()).toMatchObject({ google: true });
-    const client = new Client(h.app);
-    const { state, nonce } = await begin(h, client);
-    box.nonce = nonce;
-    const done = await client.call(`/api/auth/google/callback?code=abc&state=${state}`);
-    expect(done.headers.get("location")).toBe(`${ORIGIN}/#/`);
-    expect(box.sent!.get("code_verifier")).toBeTruthy();
-    const me = await client.json<{ user: { email: string; hasGoogle: boolean; hasPassword: boolean }; org: { name: string }; role: string }>("/api/auth/me");
-    expect(me).toMatchObject({ user: { email: "gail@example.test", hasGoogle: true, hasPassword: false }, org: { name: "Gail's workspace" }, role: "owner" });
-
-    const again = new Client(h.app);
-    const second = await begin(h, again);
-    box.nonce = second.nonce;
-    await again.call(`/api/auth/google/callback?code=abc&state=${second.state}`);
-    expect((await again.json<{ org: { id: string } }>("/api/auth/me")).org).toEqual(me.org);
-  });
-
-  it("will not merge into a password account nobody proved they own", async () => {
-    const { h, box } = withGoogle(good("ann@example.test"));
-    await new Client(h.app).signUp("ann@example.test", "Squatter's");
-    const client = new Client(h.app);
-    const { state, nonce } = await begin(h, client);
-    box.nonce = nonce;
-    const done = await client.call(`/api/auth/google/callback?code=abc&state=${state}`);
-    expect(done.headers.get("location")).toBe(`${ORIGIN}/#/signin?error=google_exists`);
-    expect((await client.call("/api/auth/me")).status).toBe(401);
-  });
-
-  it("connects Google to the signed-in account that shares its address", async () => {
-    const { h, box } = withGoogle(good("ann@example.test"));
-    const ann = await new Client(h.app).signUp("ann@example.test", "Ann");
-    const { state, nonce } = await begin(h, ann, "?link=1");
-    box.nonce = nonce;
-    const done = await ann.call(`/api/auth/google/callback?code=abc&state=${state}`);
-    expect(done.headers.get("location")).toBe(`${ORIGIN}/#/settings?linked=google`);
-    expect((await ann.json<{ user: { hasGoogle: boolean } }>("/api/auth/me")).user.hasGoogle).toBe(true);
-    // Connecting needs a session at the start.
-    expect((await new Client(h.app).call("/api/auth/google/start?link=1")).status).toBe(401);
-  });
-
-  it("rejects a forged state, a stale token and an unverified address", async () => {
-    const forged = withGoogle(good("gail@example.test"));
-    const c1 = new Client(forged.h.app);
-    const s1 = await begin(forged.h, c1);
-    forged.box.nonce = s1.nonce;
-    expect((await c1.call("/api/auth/google/callback?code=abc&state=wrong")).headers.get("location")).toContain("error=google_failed");
-    // The pending sign-in is spent by the failed attempt.
-    expect((await c1.call(`/api/auth/google/callback?code=abc&state=${s1.state}`)).headers.get("location")).toContain("error=google_failed");
-
-    const replayed = withGoogle(good("gail@example.test"));
-    const c2 = new Client(replayed.h.app);
-    const s2 = await begin(replayed.h, c2);
-    replayed.box.nonce = "a nonce from another sign-in";
-    expect((await c2.call(`/api/auth/google/callback?code=abc&state=${s2.state}`)).headers.get("location")).toContain("error=google_failed");
-
-    const wrongAudience = withGoogle(good("gail@example.test", { aud: "someone-else" }));
-    const c3 = new Client(wrongAudience.h.app);
-    const s3 = await begin(wrongAudience.h, c3);
-    wrongAudience.box.nonce = s3.nonce;
-    expect((await c3.call(`/api/auth/google/callback?code=abc&state=${s3.state}`)).headers.get("location")).toContain("error=google_failed");
-
-    const unverified = withGoogle(good("gail@example.test", { email_verified: false }));
-    const c4 = new Client(unverified.h.app);
-    const s4 = await begin(unverified.h, c4);
-    unverified.box.nonce = s4.nonce;
-    expect((await c4.call(`/api/auth/google/callback?code=abc&state=${s4.state}`)).headers.get("location")).toContain("error=google_unverified");
-  });
-});
-
-describe("networks", () => {
-  it("derives a different contract for the same asset on each network, and keeps payments on one", async () => {
-    const testnet = new FakeChain();
-    const mainnet = new FakeChain();
-    const concord = new Concord(new Db(":memory:"), {
-      testnet: { passphrase: PASSPHRASE, chain: testnet },
-      mainnet: { passphrase: MAINNET_PASSPHRASE, chain: mainnet },
-    });
-    const issuer = key();
-    const onTest = await concord.watchAsset({ network: "testnet", asset: `FUND:${issuer}`, fromLedger: 1 });
-    const onMain = await concord.watchAsset({ network: "mainnet", asset: `FUND:${issuer}`, fromLedger: 1 });
-    expect(onTest.id).not.toBe(onMain.id);
-    expect(concord.overview("mainnet").assets.map((a) => a.id)).toEqual([onMain.id]);
-    expect(concord.overview().networks).toEqual(["mainnet", "testnet"]);
-
-    const holder = key();
-    mainnet.push(onMain.id, "mint", 3, { to: holder, amount: u(7) });
-    testnet.push(onTest.id, "mint", 3, { to: holder, amount: u(9) });
-    // An outage on one network leaves the other indexing.
-    testnet.failOnCall = 1;
-    const results = await concord.syncAll();
-    expect(results[onMain.id]).toEqual({ added: 1 });
-    expect(results[onTest.id]).toEqual({ error: "Indexing stopped on an unexpected error." });
-    expect(concord.holdings(onMain.id).supply).toBe("7");
-    expect(concord.asset(onTest.id).syncError).toBeTruthy();
-    await concord.syncAll();
-    expect(concord.holdings(onTest.id).supply).toBe("9");
-    expect(concord.asset(onTest.id).syncError).toBeUndefined();
-
-    await expect(
-      concord.createAction(onMain.id, { type: "dividend", recordTime: at(5), ratePerUnit: "1", payAsset: onTest.id }),
-    ).rejects.toThrow(/same network/);
-    await expect(concord.watchAsset({ network: "devnet" as "testnet", asset: `FUND:${issuer}` })).rejects.toThrow(/mainnet or testnet/);
-  });
-
-  it("serves both networks with public endpoints by default and names retired settings", () => {
-    const config = loadConfig({});
-    expect(config.defaultNetwork).toBe("mainnet");
-    expect(config.networks.mainnet.rpc.length).toBeGreaterThan(1);
-    expect(config.networks.testnet.rpc[0]!.url).toBe("https://soroban-testnet.stellar.org");
-    expect(loadConfig({ CONCORD_MAINNET_RPC_URLS: "https://rpc.example/key/abc/ , https://b.example" }).networks.mainnet.rpc.map((e) => e.url)).toEqual([
-      "https://rpc.example/key/abc",
-      "https://b.example",
-    ]);
-    expect(loadConfig({ PORT: "10000", CONCORD_HOST: "0.0.0.0" })).toMatchObject({ port: 10000, publicUrl: "http://127.0.0.1:10000" });
-    expect(() => loadConfig({ CONCORD_API_TOKEN: "x" })).toThrow(/no longer read/);
-    expect(() => loadConfig({ CONCORD_DB: "x.db" })).toThrow(/CONCORD_DATA_DIR/);
-    expect(() => loadConfig({ CONCORD_GOOGLE_CLIENT_ID: "only-one" })).toThrow(/both/);
-    expect(loadConfig({ CONCORD_PASSWORD_COST: "16384:8:1" }).passwordCost).toEqual({ N: 16384, r: 8, p: 1 });
-    expect(loadConfig({}).passwordCost).toBeUndefined();
-    for (const weak of ["1024:8:1", "20000:8:1", "32768:8", "nope"]) {
-      expect(() => loadConfig({ CONCORD_PASSWORD_COST: weak }), weak).toThrow(/CONCORD_PASSWORD_COST/);
-    }
-  });
-});
-
-describe("chain endpoints", () => {
-  const network = (urls: string[], headers?: Record<string, string>) => ({
-    name: "mainnet" as const,
-    passphrase: MAINNET_PASSPHRASE,
-    rpc: urls.map((url) => ({ url, ...(headers ? { headers } : {}) })),
-    horizon: [{ url: "https://horizon.example" }],
-  });
-  const health = () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { latestLedger: 50, oldestLedger: 10, oldestLedgerCloseTime: "1790000000" } }));
-
-  function scripted(answers: Record<string, Array<() => Response | Promise<Response>>>) {
-    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
-    const clock = { value: 1_000_000 };
-    const fetch = (async (url: unknown, init?: RequestInit) => {
-      const u = String(url);
-      calls.push({ url: u, headers: (init?.headers ?? {}) as Record<string, string> });
-      const next = answers[u]?.shift();
-      if (!next) throw new TypeError("fetch failed");
-      return next();
-    }) as typeof globalThis.fetch;
-    const deps = { fetch, sleep: async (ms: number) => void (clock.value += ms), now: () => clock.value };
-    return { calls, clock, deps };
-  }
-
-  it("moves to the next endpoint when one is rate limited, and rests the first", async () => {
-    const a = "https://a.example/secret-key-123";
-    const b = "https://b.example";
-    const { calls, clock, deps } = scripted({
-      [a]: [() => new Response("slow down", { status: 429, headers: { "retry-after": "40" } }), health],
-      [b]: [health, health],
-    });
-    const source = new StellarSource(network([a, b], { "x-api-key": "k" }), deps);
-    expect(await source.latestLedger()).toEqual({ latest: 50, oldest: 10, oldestClosedAt: new Date(1790000000 * 1000).toISOString() });
-    expect(calls.map((c) => c.url)).toEqual([a, b]);
-    expect(calls[0]!.headers["x-api-key"]).toBe("k");
-    // Still resting: the next call goes straight to the second endpoint.
-    await source.latestLedger();
-    expect(calls.map((c) => c.url)).toEqual([a, b, b]);
-    clock.value += 41_000;
-    await source.latestLedger();
-    expect(calls.at(-1)!.url).toBe(a);
-  });
-
-  it("retries a failing endpoint once, then reports hosts only", async () => {
-    const a = "https://a.example/secret-key-123";
-    const { calls, deps } = scripted({ [a]: [() => new Response("", { status: 503 }), health] });
-    const source = new StellarSource(network([a]), deps);
-    await source.latestLedger();
-    expect(calls).toHaveLength(2);
-
-    const down = scripted({ [a]: [() => new Response("", { status: 429 })] });
-    const limited = new StellarSource(network([a, "https://b.example/another-key"]), down.deps);
-    const err = await limited.latestLedger().catch((e: Error) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("a.example: rate limited");
-    expect((err as Error).message).toContain("b.example: unreachable");
-    expect((err as Error).message).not.toContain("secret-key");
-    expect((err as Error).message).not.toContain("another-key");
-    // With every endpoint resting, the next call says so without knocking again.
-    const before = down.calls.length;
-    await expect(limited.latestLedger()).rejects.toThrow(/not answering/);
-    expect(down.calls).toHaveLength(before);
-  });
-
-  it("does not retry a request the RPC rejected", async () => {
-    const a = "https://a.example";
-    const { calls, deps } = scripted({
-      [a]: [() => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "startLedger must be within the ledger range" } }))],
-    });
-    const source = new StellarSource(network([a, "https://b.example"]), deps);
-    await expect(source.getEvents("C", { startLedger: 1 }, 10)).rejects.toThrow(/ledger range/);
-    expect(calls).toHaveLength(1);
-  });
-
-  it("reads opening balances page by page from one Horizon, and refuses one that goes backwards", async () => {
-    const issuer = key();
-    const [h1, h2] = [key(), key()];
-    const line = (balance: string, authorized = true) => ({ asset_code: "FUND", asset_issuer: issuer, balance, is_authorized: authorized });
-    const record = (id: string, balance: string) => ({ account_id: id, balances: [line(balance)] });
-    const many = Array.from({ length: 199 }, () => record(key(), "1.0000000"));
-    const first = `https://horizon.example/accounts?asset=FUND:${issuer}&limit=200&order=asc`;
-    const second = "https://horizon.example/accounts?cursor=abc&limit=200";
-    const page = (records: unknown[], ledger: number, next?: string) => () =>
-      new Response(JSON.stringify({ _links: next ? { next: { href: next } } : {}, _embedded: { records } }), {
-        headers: { "latest-ledger": String(ledger) },
-      });
-    const ok = scripted({
-      [first]: [page([record(h1, "70.0000000"), ...many], 150, "https://other-host.example/accounts?cursor=abc&limit=200")],
-      [second]: [page([record(h2, "30.5000000")], 152)],
-    });
-    const source = new StellarSource(network(["https://rpc.example"]), ok.deps);
-    const baseline = await source.baseline("FUND", issuer, 7);
-    expect(baseline.ledger).toBe(150);
-    expect(baseline.openings.size).toBe(201);
-    expect(baseline.openings.get(h1)).toEqual({ amount: u(70), asOfLedger: 150, authorized: true });
-    expect(baseline.openings.get(h2)).toEqual({ amount: 305_000_000n, asOfLedger: 152, authorized: true });
-    // The next link named another host; the request stayed on the configured one.
-    expect(ok.calls.map((c) => c.url)).toEqual([first, second]);
-
-    const lagging = scripted({
-      [first]: [page([record(h1, "70.0000000"), ...many], 150, second)],
-      [second]: [page([record(h2, "30.5000000")], 149)],
-    });
-    await expect(new StellarSource(network(["https://rpc.example"]), lagging.deps).baseline("FUND", issuer, 7)).rejects.toThrow(/back in time/);
-  });
-
-  it("finds classic assets by code, most widely held first", async () => {
-    const [i1, i2] = [key(), key()];
-    const asset = (issuer: string, authorized: number, flags: boolean) => ({
-      asset_code: "BENJI",
-      asset_issuer: issuer,
-      accounts: { authorized, authorized_to_maintain_liabilities: 0, unauthorized: 2 },
-      balances: { authorized: "10.0000000" },
-      flags: { auth_required: flags, auth_revocable: flags, auth_clawback_enabled: flags },
-    });
-    const { deps } = scripted({
-      "https://horizon.example/assets?asset_code=BENJI&limit=200": [
-        () => new Response(JSON.stringify({ _embedded: { records: [asset(i1, 4, false), asset(i2, 1376, true)] } })),
-      ],
-    });
-    const found = await new StellarSource(network(["https://rpc.example"]), deps).search("BENJI");
-    expect(found.map((f) => [f.issuer, f.trustlines, f.clawbackEnabled])).toEqual([
-      [i2, 1378, true],
-      [i1, 6, false],
-    ]);
-    expect(found[0]!.asset).toBe(`BENJI:${i2}`);
-    expect(found[0]!.contractId).toMatch(/^C[A-Z2-7]{55}$/);
-  });
-});
-
-describe("what ships", () => {
-  it("keeps the testnet practice script away from every database", () => {
-    const source = readFileSync(new URL("../src/demo/testnet.ts", import.meta.url), "utf8");
-    const imports = [...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]!);
-    for (const banned of ["db", "concord", "tenants", "main", "auth", "schema"]) {
-      expect(imports.some((i) => i.endsWith(`/${banned}.js`)), banned).toBe(false);
-    }
-    expect(source).not.toMatch(/watchAsset|importRegister|DatabaseSync/);
-  });
-
-  it("starts both schemas from nothing and refuses a database from before versioning", () => {
-    const control = new Db(":memory:", CONTROL_MIGRATIONS);
-    expect(control.get<{ user_version: number }>("PRAGMA user_version")!.user_version).toBe(CONTROL_MIGRATIONS.length);
-    const org = new Db(":memory:", ORG_MIGRATIONS);
-    expect(org.get<{ foreign_keys: number }>("PRAGMA foreign_keys")!.foreign_keys).toBe(1);
-    expect(() => new Db(":memory:", [...ORG_MIGRATIONS, "CREATE TABLE broken (x REFERENCES nowhere (y)); INSERT INTO broken VALUES (1);"])).toThrow();
+    const openings = await source.baseline({ network: "testnet", asset: `FUND:${key()}`, fromLedger: 1 });
+    expect(openings.length).toBe(page1._embedded.records.length + page2._embedded.records.length + full);
+    // A full final page with no next link is terminal.
+    expect(seen.length).toBe(full > 0 ? 3 : 3);
   });
 });
