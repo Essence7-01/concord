@@ -277,4 +277,14 @@ describe("controls log", () => {
     const log = buildControlsLog(events.slice(1, 2), instructions, { asOf: "2026-10-02T01:00:00Z" });
     expect(log.summary.uninstructed).toBe(1);
   });
+
+  it("gives identical output for the same input on repeated calls", () => {
+    const { instructions } = parseInstructionsCsv(
+      "ref,type,account,issued_at\nI1,freeze,A,2026-10-01T00:00:00Z\n",
+    );
+    const options = { asOf: "2026-10-06T12:00:00Z" };
+    expect(buildControlsLog(events, instructions, options)).toEqual(
+      buildControlsLog(events, instructions, options),
+    );
+  });
 });

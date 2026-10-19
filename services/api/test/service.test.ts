@@ -1,9 +1,29 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import Ajv from "ajv";
 import { nativeToScVal } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it } from "vitest";
 import { decodeEvent } from "../src/chain.js";
-import { Concord } from "../src/concord.js";
+import { USAGE } from "../src/cli-usage.js";
+import { Concord, NotFound } from "../src/concord.js";
 import { Db } from "../src/db.js";
 import { Client, FakeChain, PASSPHRASE, at, harness, key, u } from "./helpers.js";
+
+const validateAuditPack = new Ajv({ allErrors: true, strict: true }).compile(
+  JSON.parse(readFileSync(fileURLToPath(new URL("../../../docs/audit-pack.schema.json", import.meta.url)), "utf8")),
+);
+
+/** Every key path in a value, with `[]` for arrays, so a renamed or dropped field changes the list. */
+function keyPaths(value: unknown, prefix = ""): string[] {
+  if (Array.isArray(value)) {
+    const here = `${prefix}[]`;
+    return [here, ...value.flatMap((item) => keyPaths(item, here))];
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).flatMap(([key, child]) => keyPaths(child, prefix ? `${prefix}.${key}` : key));
+  }
+  return prefix ? [prefix] : [];
+}
 
 describe("decodeEvent", () => {
   const a = key();
@@ -76,6 +96,28 @@ describe("Concord", () => {
     expect(h.supply).toBe("1144.00025");
     expect(h.holders.find((x) => x.address === h2)).toMatchObject({ units: "55", status: "frozen" });
     expect(concord.asset("FUND").syncedLedger).toBe(100);
+  });
+
+  it("rejects reconciliation when no register has been imported", async () => {
+    await expect(concord.reconcile("FUND")).rejects.toThrow(new NotFound("no register imported for this asset"));
+  });
+
+  it("defaults to the latest register by as-of time rather than import order", async () => {
+    const csv = `holder_id,account,units\nA,${h1},90\nB,${h2},55\n`;
+    const latest = concord.importRegister("FUND", { csv, asOf: at(40) });
+    const older = concord.importRegister("FUND", { csv, asOf: at(10) });
+
+    expect(latest.registerId).toBe(1);
+    expect(older.registerId).toBeGreaterThan(latest.registerId);
+    expect(await concord.reconcile("FUND")).toMatchObject({ registerId: latest.registerId, asOf: at(40) });
+  });
+
+  it("rejects a register from another asset and an unknown register id", async () => {
+    const reg = concord.importRegister("FUND", { csv: `holder_id,account,units\nA,${h1},90\n`, asOf: at(40) });
+    await concord.watchAsset({ network: "testnet", asset: `OTHER:${issuer}`, fromLedger: 1 });
+
+    await expect(concord.reconcile("OTHER", reg.registerId)).rejects.toThrow(new NotFound("no register imported for this asset"));
+    await expect(concord.reconcile("FUND", 999)).rejects.toThrow(new NotFound("no register imported for this asset"));
   });
 
   it("reconciles a register at its as-of time and ages breaks", async () => {
@@ -205,6 +247,247 @@ describe("Concord", () => {
     expect(concord.auditExport("FUND").sha256).toBe(pack.sha256);
     expect(concord.exportCsv("FUND", "controls").split("\n")[0]).toContain("instructionRef");
     expect(concord.exportCsv("FUND", "breaks")).toContain("UNINSTRUCTED_CONTROL");
+  });
+
+  it("keeps the audit pack inside the published schema", async () => {
+    await concord.sync("FUND");
+    concord.importJournal(
+      "FUND",
+      `ref,date,type,from_account,to_account,units\nJ1,${at(3)},issue,,${h1},100\nJ2,${at(3)},issue,,${h2},50\n`,
+    );
+    // I1 and I2 cover the authorisation and freeze; I3 is recent enough to still be pending, and
+    // the clawback has no instruction, so every controls branch appears in the pack.
+    concord.importInstructions(
+      "FUND",
+      `ref,type,account,units,issued_at,approved_by,reason\nI1,authorise,${h1},,${at(1)},ops,KYC\nI2,freeze,${h2},,${at(19)},compliance,order\nI3,freeze,${h3},,${new Date().toISOString()},ops,review\n`,
+    );
+    const reg = concord.importRegister("FUND", {
+      csv: `holder_id,account,units,status\nA,${h1},90,active\nB,${h2},50,active\n`,
+      asOf: at(5),
+    });
+    const run = await concord.reconcile("FUND", reg.registerId);
+    const first = run.breaks[0]!;
+    concord.setNote(
+      "FUND",
+      "recon",
+      first.key,
+      { fingerprint: first.fingerprint, status: "resolved", note: "register corrected" },
+      { id: "u1", label: "ops <ops@example.test>" },
+    );
+    await concord.createAction("FUND", { type: "split", recordTime: at(5), num: "2", den: "1" });
+
+    const pack = concord.auditExport("FUND");
+    expect(validateAuditPack(pack), JSON.stringify(validateAuditPack.errors, null, 2)).toBe(true);
+
+    // The schema rejects added fields and misses required ones. This list catches a field that
+    // disappears from the fixture, including the optional per-break figures the schema cannot
+    // require for every scope.
+    expect([...new Set(keyPaths(pack))].sort()).toMatchInlineSnapshot(`
+      [
+        "asset.baselineLedger",
+        "asset.code",
+        "asset.decimals",
+        "asset.historyFrom",
+        "asset.id",
+        "asset.ignoredAddresses[]",
+        "asset.indexedFromLedger",
+        "asset.indexedTo",
+        "asset.indexedToLedger",
+        "asset.issuer",
+        "asset.name",
+        "asset.network",
+        "controls.asOf",
+        "controls.breaks[]",
+        "controls.breaks[].address",
+        "controls.breaks[].eventId",
+        "controls.breaks[].fingerprint",
+        "controls.breaks[].key",
+        "controls.breaks[].message",
+        "controls.breaks[].note",
+        "controls.breaks[].noteAt",
+        "controls.breaks[].noteAuthor",
+        "controls.breaks[].noteScope",
+        "controls.breaks[].noteStale",
+        "controls.breaks[].ref",
+        "controls.breaks[].scope",
+        "controls.breaks[].severity",
+        "controls.breaks[].status",
+        "controls.breaks[].txHash",
+        "controls.breaks[].type",
+        "controls.openBreaks",
+        "controls.pending[]",
+        "controls.pending[].account",
+        "controls.pending[].approvedBy",
+        "controls.pending[].issuedAt",
+        "controls.pending[].reason",
+        "controls.pending[].ref",
+        "controls.pending[].type",
+        "controls.pending[].units",
+        "controls.records[]",
+        "controls.records[].account",
+        "controls.records[].closedAt",
+        "controls.records[].eventId",
+        "controls.records[].instruction",
+        "controls.records[].instruction.account",
+        "controls.records[].instruction.approvedBy",
+        "controls.records[].instruction.issuedAt",
+        "controls.records[].instruction.reason",
+        "controls.records[].instruction.ref",
+        "controls.records[].instruction.type",
+        "controls.records[].instruction.units",
+        "controls.records[].ledger",
+        "controls.records[].txHash",
+        "controls.records[].type",
+        "controls.records[].units",
+        "controls.summary.controls",
+        "controls.summary.instructed",
+        "controls.summary.pending",
+        "controls.summary.unexecuted",
+        "controls.summary.uninstructed",
+        "corporateActions[]",
+        "corporateActions[].assetId",
+        "corporateActions[].createdAt",
+        "corporateActions[].id",
+        "corporateActions[].label",
+        "corporateActions[].openBreaks",
+        "corporateActions[].params.den",
+        "corporateActions[].params.exclude[]",
+        "corporateActions[].params.num",
+        "corporateActions[].reconciledAt",
+        "corporateActions[].recordTime",
+        "corporateActions[].result.breaks[]",
+        "corporateActions[].result.breaks[].address",
+        "corporateActions[].result.breaks[].difference",
+        "corporateActions[].result.breaks[].expected",
+        "corporateActions[].result.breaks[].fingerprint",
+        "corporateActions[].result.breaks[].key",
+        "corporateActions[].result.breaks[].message",
+        "corporateActions[].result.breaks[].note",
+        "corporateActions[].result.breaks[].noteAt",
+        "corporateActions[].result.breaks[].noteAuthor",
+        "corporateActions[].result.breaks[].noteScope",
+        "corporateActions[].result.breaks[].noteStale",
+        "corporateActions[].result.breaks[].observed",
+        "corporateActions[].result.breaks[].scope",
+        "corporateActions[].result.breaks[].severity",
+        "corporateActions[].result.breaks[].status",
+        "corporateActions[].result.breaks[].type",
+        "corporateActions[].result.flowAsset.code",
+        "corporateActions[].result.flowAsset.id",
+        "corporateActions[].result.lines[]",
+        "corporateActions[].result.lines[].address",
+        "corporateActions[].result.lines[].basis",
+        "corporateActions[].result.lines[].difference",
+        "corporateActions[].result.lines[].expected",
+        "corporateActions[].result.lines[].observed",
+        "corporateActions[].result.lines[].status",
+        "corporateActions[].result.lines[].txHashes[]",
+        "corporateActions[].result.reconciledThrough",
+        "corporateActions[].result.status",
+        "corporateActions[].result.summary.breakCount",
+        "corporateActions[].result.summary.difference",
+        "corporateActions[].result.summary.expectedTotal",
+        "corporateActions[].result.summary.holders",
+        "corporateActions[].result.summary.observedTotal",
+        "corporateActions[].result.warnings[]",
+        "corporateActions[].snapshot.holderCount",
+        "corporateActions[].snapshot.holders[]",
+        "corporateActions[].snapshot.holders[].address",
+        "corporateActions[].snapshot.holders[].units",
+        "corporateActions[].snapshot.ledger",
+        "corporateActions[].snapshot.takenAt",
+        "corporateActions[].state",
+        "corporateActions[].type",
+        "events[]",
+        "events[].authorized",
+        "events[].closedAt",
+        "events[].from",
+        "events[].id",
+        "events[].kind",
+        "events[].ledger",
+        "events[].to",
+        "events[].txHash",
+        "events[].units",
+        "generatedAt",
+        "generator",
+        "holdings.asOf",
+        "holdings.holderCount",
+        "holdings.holders[]",
+        "holdings.holders[].address",
+        "holdings.holders[].ignored",
+        "holdings.holders[].share",
+        "holdings.holders[].status",
+        "holdings.holders[].units",
+        "holdings.incomplete[]",
+        "holdings.ledger",
+        "holdings.supply",
+        "period.from",
+        "period.to",
+        "reconciliations[]",
+        "reconciliations[].asOf",
+        "reconciliations[].assetId",
+        "reconciliations[].breaks[]",
+        "reconciliations[].breaks[].address",
+        "reconciliations[].breaks[].chainUnits",
+        "reconciliations[].breaks[].difference",
+        "reconciliations[].breaks[].fingerprint",
+        "reconciliations[].breaks[].firstSeen",
+        "reconciliations[].breaks[].holderIds[]",
+        "reconciliations[].breaks[].key",
+        "reconciliations[].breaks[].message",
+        "reconciliations[].breaks[].note",
+        "reconciliations[].breaks[].noteAt",
+        "reconciliations[].breaks[].noteAuthor",
+        "reconciliations[].breaks[].noteScope",
+        "reconciliations[].breaks[].noteStale",
+        "reconciliations[].breaks[].registerUnits",
+        "reconciliations[].breaks[].scope",
+        "reconciliations[].breaks[].severity",
+        "reconciliations[].breaks[].status",
+        "reconciliations[].breaks[].type",
+        "reconciliations[].chainBehind",
+        "reconciliations[].chainLedger",
+        "reconciliations[].chainSyncedAt",
+        "reconciliations[].createdAt",
+        "reconciliations[].id",
+        "reconciliations[].lines[]",
+        "reconciliations[].lines[].address",
+        "reconciliations[].lines[].chainStatus",
+        "reconciliations[].lines[].chainUnits",
+        "reconciliations[].lines[].difference",
+        "reconciliations[].lines[].holderIds[]",
+        "reconciliations[].lines[].matched",
+        "reconciliations[].lines[].registerStatus",
+        "reconciliations[].lines[].registerUnits",
+        "reconciliations[].movement.breakCount",
+        "reconciliations[].movement.entries",
+        "reconciliations[].movement.events",
+        "reconciliations[].movement.from",
+        "reconciliations[].movement.matched",
+        "reconciliations[].movement.matches[]",
+        "reconciliations[].movement.matches[].by",
+        "reconciliations[].movement.matches[].eventId",
+        "reconciliations[].movement.matches[].ref",
+        "reconciliations[].movement.matches[].txHash",
+        "reconciliations[].movement.to",
+        "reconciliations[].openBreaks",
+        "reconciliations[].registerId",
+        "reconciliations[].registerSha256",
+        "reconciliations[].status",
+        "reconciliations[].summary.breakCount",
+        "reconciliations[].summary.chainHolders",
+        "reconciliations[].summary.chainSupply",
+        "reconciliations[].summary.grossDifference",
+        "reconciliations[].summary.lines",
+        "reconciliations[].summary.matchedLines",
+        "reconciliations[].summary.registerHolders",
+        "reconciliations[].summary.registerTotal",
+        "reconciliations[].summary.supplyDifference",
+        "reconciliations[].summary.unmappedUnits",
+        "reconciliations[].warnings[]",
+        "sha256",
+      ]
+    `);
   });
 
   it("holds the indexed-to mark still when a pass dies part-way", async () => {
@@ -339,5 +622,73 @@ describe("Concord", () => {
     expect(await csv.text()).toContain(h1);
     const template = await client.call("/api/templates/register.csv");
     expect(await template.text()).toBe("holder_id,holder_name,account,units,status\n");
+  });
+});
+
+describe("documented input files", () => {
+  const readme = readFileSync(fileURLToPath(new URL("../../../README.md", import.meta.url)), "utf8");
+
+  /** The column names in one README Input-files row. Parenthesised value enumerations go. */
+  function documentedColumns(row: string): string[] {
+    const columnWords = row.replace(/\([^)]*\)/g, "");
+    return [...new Set([...columnWords.matchAll(/`([A-Za-z_]+)`/g)].map((m) => m[1]!))].sort();
+  }
+
+  it("lists the same columns as the CSV templates the API serves", async () => {
+    const client = await new Client(harness().app).signUp("docs@example.test", "Docs");
+    const rows = readme.split("\n").filter((line) => line.startsWith("| "));
+    const files = [
+      ["register", "Register"],
+      ["journal", "Journal"],
+      ["instructions", "Instructions"],
+    ] as const;
+    for (const [kind, file] of files) {
+      const res = await client.call(`/api/templates/${kind}.csv`);
+      expect(res.status, `${kind} template`).toBe(200);
+      const headers = (await res.text())
+        .trim()
+        .split(/\r?\n/)[0]!
+        .split(",")
+        .map((h) => h.trim())
+        .sort();
+      const row = rows.find((line) => line.startsWith(`| ${file} |`));
+      expect(row, `the README has no ${file} row in its Input files table`).toBeTruthy();
+      expect(documentedColumns(row!), `${kind} template vs the README ${file} row`).toEqual(headers);
+    }
+  });
+});
+
+describe("README CLI examples", () => {
+  // Guards the README against drift: a command renamed or removed from the usage text,
+  // or a flag named in a README example but not in it, fails here.
+  const readme = readFileSync(fileURLToPath(new URL("../../../README.md", import.meta.url)), "utf8");
+  const examples = [...readme.matchAll(/```sh\n([\s\S]*?)```/g)]
+    .flatMap((b) => b[1].split("\n"))
+    .filter((line) => line.startsWith("pnpm concord"))
+    .map((line) => line.replace(/\s+$/, ""));
+
+  const usageCommands = new Set(
+    USAGE.split("\n")
+      .filter((line) => /^ {2}\S/.test(line))
+      .map((line) => line.slice(2).split(/\s+/)[0]!),
+  );
+  const usageFlags = new Set(USAGE.match(/--[\w-]+/g));
+
+  it("mentions every command the README examples run", () => {
+    expect(examples.length).toBeGreaterThan(0);
+    for (const line of examples) {
+      const command = line.split(/\s+/)[2];
+      if (command && !command.startsWith("--")) {
+        expect(usageCommands.has(command), `README runs "${command}", but it is not in the CLI usage text`).toBe(true);
+      }
+    }
+  });
+
+  it("names every flag the README examples pass", () => {
+    for (const line of examples) {
+      for (const flag of line.match(/--[\w-]+/g) ?? []) {
+        expect(usageFlags.has(flag), `README example passes "${flag}", but the CLI usage text does not name it`).toBe(true);
+      }
+    }
   });
 });

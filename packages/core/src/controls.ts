@@ -98,7 +98,7 @@ export interface ControlsOptions {
   /** How long after approval an instruction may be executed. Default 72h. */
   windowMs?: number;
   /** ISO-8601 time the chain is indexed up to. Instructions past their window before it are breaks. */
-  asOf?: string;
+  asOf: string;
 }
 
 /**
@@ -139,7 +139,7 @@ function compatible(record: ControlRecord, instruction: Instruction): boolean {
 export function buildControlsLog(
   events: AssetEvent[],
   instructions: Instruction[],
-  options: ControlsOptions = {},
+  options: ControlsOptions,
 ): ControlsLog {
   const windowMs = options.windowMs ?? 72 * 3_600_000;
   const records = controlEvents(events);
@@ -170,7 +170,7 @@ export function buildControlsLog(
     }
   }
 
-  const asOf = options.asOf ? Date.parse(options.asOf) : Date.now();
+  const asOf = Date.parse(options.asOf);
   const pending: Instruction[] = [];
   for (const instruction of ordered) {
     if (used.has(instruction.ref)) continue;

@@ -1,12 +1,14 @@
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { StellarSource } from "../src/chain.js";
 import { Concord } from "../src/concord.js";
 import { loadConfig } from "../src/config.js";
 import { Db } from "../src/db.js";
 import { CONTROL_MIGRATIONS, ORG_MIGRATIONS } from "../src/schema.js";
-import { Tenants, memoryStore } from "../src/tenants.js";
-import { Client, FakeChain, MAINNET_PASSTHRASE, ORIGIN, PASSPHRASE, at, harness, key, u, type Harness } from "./helpers.js";
+import { Tenants, fileStore, memoryStore } from "../src/tenants.js";
+import { Client, FakeChain, MAINNET_PASSPHRASE, ORIGIN, PASSPHRASE, at, harness, key, u, type Harness } from "./helpers.js";
 
 /** Strings that exist only in workspace A. None may ever reach workspace B. */
 const MARKERS = ["ALPHA-HOLDER-7", "Northgate Secret Trust", "alpha sign-off note", "J-ALPHA", "I-ALPHA", "Alpha Capital"];
@@ -212,6 +214,57 @@ describe("workspace isolation", () => {
     expect(() => again.forOrg("bbbbbbbbbbbbbbbb")).toThrow(/belongs to aaaaaaaaaaaaaaaaa/);
   });
 
+  it("deletes SQLite db/WAL/SHM files and only reopens an explicitly known org (#500)", () => {
+    // Exercise the real file store, not the in-memory store used for route tests.
+    const temp = mkdtempSync(join(tmpdir(), "concord-tenant-drop-"));
+    const orgDir = join(temp, "orgs");
+    const alpha = "aaaaaaaaaaaaaaaa";
+    const beta = "bbbbbbbbbbbbbbbb";
+    const stale = "cccccccccccccccc";
+    const known = new Set([alpha, beta]);
+    const tenants = new Tenants(fileStore(temp), {}, (id) => known.has(id), () => [...known]);
+    const paths = (id: string) => [`${id}.db`, `${id}.db-wal`, `${id}.db-shm`];
+    const files = () => readdirSync(orgDir).sort();
+
+    try {
+      const alphaDb = tenants.forOrg(alpha).db;
+      const betaDb = tenants.forOrg(beta).db;
+      alphaDb.run("INSERT INTO meta (key, value) VALUES ('sample', 'ALPHA ONLY')");
+      betaDb.run("INSERT INTO meta (key, value) VALUES ('sample', 'BETA ONLY')");
+
+      // SQLite holds its WAL and shared-memory files while both handles are open.
+      expect(files()).toEqual([...paths(alpha), ...paths(beta)].sort());
+
+      // Invalid path-like ids cannot delete an unrelated file.
+      const sentinel = join(temp, "x.db");
+      writeFileSync(sentinel, "not a workspace");
+      tenants.drop("../x");
+      expect(existsSync(sentinel)).toBe(true);
+      expect(files()).toEqual([...paths(alpha), ...paths(beta)].sort());
+
+      tenants.drop(alpha);
+      expect(files()).toEqual(paths(beta).sort());
+      expect(betaDb.get<{ value: string }>("SELECT value FROM meta WHERE key = 'sample'")?.value).toBe("BETA ONLY");
+
+      known.delete(alpha);
+      expect(() => tenants.forOrg(alpha)).toThrow(/no such workspace/);
+      expect(files()).toEqual(paths(beta).sort()); // rejected reopen creates nothing
+
+      known.add(alpha);
+      const fresh = tenants.forOrg(alpha).db;
+      expect(fresh.get("SELECT value FROM meta WHERE key = 'sample'")).toBeUndefined();
+      expect(files()).toEqual([...paths(alpha), ...paths(beta)].sort());
+
+      // A never-opened id can still have stale on-disk artifacts after a crash.
+      for (const name of paths(stale)) writeFileSync(join(orgDir, name), "stale");
+      tenants.drop(stale);
+      expect(files()).toEqual([...paths(alpha), ...paths(beta)].sort());
+    } finally {
+      tenants.close();
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
   it("deletes a workspace without touching its neighbour", async () => {
     const s = await seed();
     await s.b.json("/api/assets", { body: { network: "testnet", asset: `KEEP:${key()}` } }).catch(() => undefined);
@@ -293,5 +346,46 @@ describe("horizon accounts pagination", () => {
     expect(openings.length).toBe(page1._embedded.records.length + page2._embedded.records.length + full);
     // A full final page with no next link is terminal.
     expect(seen.length).toBe(full > 0 ? 3 : 3);
+  });
+});
+
+describe("what ships", () => {
+  it("keeps the testnet practice script away from every database", () => {
+    const source = readFileSync(new URL("../src/demo/testnet.ts", import.meta.url), "utf8");
+    const imports = [...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]!);
+    for (const banned of ["db", "concord", "tenants", "main", "auth", "schema"]) {
+      expect(imports.some((i) => i.endsWith(`/${banned}.js`)), banned).toBe(false);
+    }
+    expect(source).not.toMatch(/watchAsset|importRegister|DatabaseSync/);
+  });
+
+  it("documents in .env.example every environment variable the service reads", () => {
+    const src = new URL("../src/", import.meta.url);
+    const sources = readdirSync(src, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".ts"))
+      .map((file) => readFileSync(new URL(file, src), "utf8"))
+      .join("\n");
+    // Names built per network, e.g. `CONCORD_${upper}_RPC_URLS`, count once for each network.
+    const expanded = ["MAINNET", "TESTNET"].map((upper) => sources.replaceAll("${upper}", upper)).join("\n");
+    // Retired names are read only to be refused, so they belong nowhere in the example.
+    const config = readFileSync(new URL("config.ts", src), "utf8");
+    const retired = new Set(config.match(/const RETIRED[^]*?\n};/)![0].match(/\bCONCORD_[A-Z0-9_]+(?=:)/g));
+    expect(retired.size).toBeGreaterThan(0);
+
+    const example = readFileSync(new URL("../../../.env.example", import.meta.url), "utf8");
+    const concord = new Set(expanded.match(/\bCONCORD_[A-Z0-9_]+/g)!.filter((name) => !retired.has(name)));
+    const undocumented = [...concord].filter((name) => !new RegExp(`^#? ?${name}=`, "m").test(example));
+    // Set by the platform rather than by an operator, so a mention is enough.
+    const platform = [...new Set(sources.match(/\b(PORT|RENDER_EXTERNAL_URL)\b/g))];
+    undocumented.push(...platform.filter((name) => !new RegExp(`\\b${name}\\b`).test(example)));
+    expect(undocumented).toEqual([]);
+  });
+
+  it("starts both schemas from nothing and refuses a database from before versioning", () => {
+    const control = new Db(":memory:", CONTROL_MIGRATIONS);
+    expect(control.get<{ user_version: number }>("PRAGMA user_version")!.user_version).toBe(CONTROL_MIGRATIONS.length);
+    const org = new Db(":memory:", ORG_MIGRATIONS);
+    expect(org.get<{ foreign_keys: number }>("PRAGMA foreign_keys")!.foreign_keys).toBe(1);
+    expect(() => new Db(":memory:", [...ORG_MIGRATIONS, "CREATE TABLE broken (x REFERENCES nowhere (y)); INSERT INTO broken VALUES (1);"])).toThrow();
   });
 });
