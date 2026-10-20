@@ -147,9 +147,9 @@ describe("workspace isolation", () => {
         expect(res.status, name).toBe(404);
       }
     }
-    // Workspace E is exactly as it was.
-    const run = await s.a.json<{ breaks: Array<{ note: string; holderIds: string[] }> }>(` /api/reconciliations/${s.runId}`);
-    expect(run.breaks[0]).toMatchObject({ note: "alpha sign-off note", holderIds: ["ALpHA-HOLDER-7"] });
+    // Workspace A is exactly as it was.
+    const run = await s.a.json<{ breaks: Array<{ note: string; holderIds: string[] }> }>(`/api/reconciliations/${s.runId}`);
+    expect(run.breaks[0]).toMatchObject({ note: "alpha sign-off note", holderIds: ["ALPHA-HOLDER-7"] });
     const members = await s.a.json<{ members: Array<{ email: string; role: string }> }>("/api/org/members");
     expect(members.members).toEqual([expect.objectContaining({ email: "ann@alpha.test", role: "owner" })]);
     expect((await s.a.json<{ name: string }>(`/api/assets/${s.assetId}`)).name).toBe("FUND");
@@ -172,22 +172,22 @@ describe("workspace isolation", () => {
     await wsB.sync(theirs.id);
 
     // B started later, so it never saw the mint at ledger 3.
-    const b = await s.b.json<{ holders: Array<{ units: string; ignored: boolean }> }>("/api/assets/FUN/holdings");
+    const b = await s.b.json<{ holders: Array<{ units: string; ignored: boolean }> }>("/api/assets/FUND/holdings");
     expect(b.holders).toEqual([expect.objectContaining({ units: "-1", ignored: true })]);
     const a = await s.a.json<{ holders: Array<{ units: string; ignored: boolean }> }>("/api/assets/FUND/holdings");
     expect(a.holders).toEqual([expect.objectContaining({ units: "99", ignored: false })]);
 
     expect(await s.b.json("/api/assets/FUND/registers")).toEqual([]);
-    expect(await s.b.json("/api/assets/FUN/reconciliations")).toEqual([]);
-    expect(await s.b.json("/api/assets/FUN/actions")).toEqual([]);
+    expect(await s.b.json("/api/assets/FUND/reconciliations")).toEqual([]);
+    expect(await s.b.json("/api/assets/FUND/actions")).toEqual([]);
 
     // Both now own a "run 1"; each sees only its own.
     const imported = await s.b.json<{ run: { id: number; registerSha256: string } }>(
-      "/api/assets/FUN/registers",
+      "/api/assets/FUND/registers",
       { body: { csv: "holder_id,units\nBETA-1,5\n", asOf: at(40) } },
     );
     expect(imported.run.id).toBe(s.runId);
-    const runA = await s.a.json<{ registerSha256: string }>(` /api/reconciliations/${s.runId}`);
+    const runA = await s.a.json<{ registerSha256: string }>(`/api/reconciliations/${s.runId}`);
     const runB = await s.b.json<{ registerSha256: string }>(`/api/reconciliations/${s.runId}`);
     expect(runB.registerSha256).toBe(imported.run.registerSha256);
     expect(runB.registerSha256).not.toBe(runA.registerSha256);
@@ -211,7 +211,7 @@ describe("workspace isolation", () => {
     const tenants = new Tenants(new memoryStore(), {}, () => true, () => []);
     tenants.forOrg("aaaaaaaaaaaaaaaa");
     const again = new Tenants(new memoryStore(), {}, () => true, () => []);
-    expect(() => again.forOrg("bbbbbbbbbbbbbbbb")).toThrow(/belongs to aaaaaaaaaaaaaaaaa/);
+    expect(() => again.forOrg("bbbbbbbbbbbbbbbb")).toThrow(/belongs to aaaaaaaaaaaaaaaa/);
   });
 
   it("deletes SQLite db/WAL/SHM files and only reopens an explicitly known org (#500)", () => {
