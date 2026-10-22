@@ -1,11 +1,13 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { Auth } from "../src/auth.js";
 import { StellarSource } from "../src/chain.js";
 import { Concord } from "../src/concord.js";
 import { loadConfig } from "../src/config.js";
 import { Db } from "../src/db.js";
+import { createServerApp } from "../src/main.js";
 import { CONTROL_MIGRATIONS, ORG_MIGRATIONS } from "../src/schema.js";
 import { Tenants, fileStore, memoryStore } from "../src/tenants.js";
 import { Client, FakeChain, MAINNET_PASSPHRASE, ORIGIN, PASSPHRASE, at, harness, key, u, type Harness } from "./helpers.js";
@@ -347,6 +349,66 @@ describe("horizon accounts pagination", () => {
     // A full final page with no next link is terminal.
     expect(seen.length).toBe(full > 0 ? 3 : 3);
   });
+
+  it("fails over to the next Horizon endpoint when _embedded.records is omitted, and reports ChainError naming hosts if all fail", async () => {
+    const h1 = "https://h1.example";
+    const h2 = "https://h2.example";
+    const net = {
+      name: "mainnet" as const,
+      passphrase: MAINNET_PASSPHRASE,
+      rpc: [{ url: "https://rpc.example" }],
+      horizon: [{ url: h1 }, { url: h2 }],
+    };
+
+    // Test search(): h1 returns malformed { title: "oops" }, h2 succeeds
+    const okSearch = () => new Response(JSON.stringify({ _embedded: { records: [] } }));
+    const badBody = () => new Response(JSON.stringify({ title: "oops" }));
+    const s1 = scripted({
+      [`${h1}/assets?asset_code=FOO&limit=200`]: [badBody],
+      [`${h2}/assets?asset_code=FOO&limit=200`]: [okSearch],
+    });
+    const src1 = new StellarSource(net, s1.deps);
+    const searchRes = await src1.search("FOO");
+    expect(searchRes).toEqual([]);
+    expect(s1.calls.map((c) => c.url)).toEqual([
+      `${h1}/assets?asset_code=FOO&limit=200`,
+      `${h2}/assets?asset_code=FOO&limit=200`,
+    ]);
+
+    // Test baseline(): h1 returns malformed accounts page, h2 succeeds
+    const issuer = key();
+    const okAccounts = () => new Response(JSON.stringify({ _links: {}, _embedded: { records: [] } }), {
+      headers: { "latest-ledger": "100" },
+    });
+    const s2 = scripted({
+      [`${h1}/accounts?asset=FOO:${issuer}&limit=200&order=asc`]: [badBody],
+      [`${h2}/accounts?asset=FOO:${issuer}&limit=200&order=asc`]: [okAccounts],
+    });
+    const src2 = new StellarSource(net, s2.deps);
+    const baseRes = await src2.baseline("FOO", issuer, 7);
+    expect(baseRes.ledger).toBe(100);
+    expect(baseRes.openings.size).toBe(0);
+
+    // Test describe(): h1 returns malformed, h2 succeeds
+    const s3 = scripted({
+      [`${h1}/assets?asset_code=FOO&asset_issuer=${issuer}&limit=200`]: [badBody],
+      [`${h2}/assets?asset_code=FOO&asset_issuer=${issuer}&limit=200`]: [okSearch],
+    });
+    const src3 = new StellarSource(net, s3.deps);
+    const descRes = await src3.describe({ id: "C123", code: "FOO", issuer });
+    expect(descRes).toBeUndefined();
+
+    // If all fail, a ChainError names the hosts
+    const sAllFail = scripted({
+      [`${h1}/assets?asset_code=FOO&limit=200`]: [badBody],
+      [`${h2}/assets?asset_code=FOO&limit=200`]: [badBody],
+    });
+    const srcAllFail = new StellarSource(net, sAllFail.deps);
+    const err = await srcAllFail.search("FOO").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("h1.example: unexpected response");
+    expect(err.message).toContain("h2.example: unexpected response");
+  });
 });
 
 describe("what ships", () => {
@@ -388,4 +450,152 @@ describe("what ships", () => {
     expect(org.get<{ foreign_keys: number }>("PRAGMA foreign_keys")!.foreign_keys).toBe(1);
     expect(() => new Db(":memory:", [...ORG_MIGRATIONS, "CREATE TABLE broken (x REFERENCES nowhere (y)); INSERT INTO broken VALUES (1);"])).toThrow();
   });
+
+  it("does not mask the original error when rollback fails in tx and migrate", () => {
+    // 1. In migrate: COMMIT inside migration followed by invalid statement
+    expect(() => {
+      new Db(":memory:", ["CREATE TABLE a (x); COMMIT; CREATE TABLE b (y;"]);
+    }).toThrow(/syntax error|near/i);
+
+    // 2. In tx: transaction already committed or rolled back inside fn
+    const db = new Db(":memory:", []);
+    expect(() => {
+      db.tx(() => {
+        db.raw.exec("COMMIT");
+        throw new Error("original failure");
+      });
+    }).toThrow("original failure");
+  });
+
+  it("does not serve files reached through encoded dot-dot with immutable caching", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "concord-static-"));
+    const webDir = join(dir, "web");
+    const dataDir = join(dir, "data");
+    mkdirSync(join(webDir, "assets"), { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(join(webDir, "index.html"), "<html>shell</html>");
+    writeFileSync(join(webDir, "secret.txt"), "secret outside assets");
+    writeFileSync(join(webDir, "assets/app.123.js"), "console.log('asset');");
+
+    const cfg = loadConfig({
+      CONCORD_DATA_DIR: dataDir,
+      CONCORD_WEB_DIR: webDir,
+      CONCORD_SIGNUP: "open",
+    });
+    const control = new Db(join(dataDir, "control.db"), CONTROL_MIGRATIONS);
+    const auth = new Auth(control, { signup: "open" });
+    const tenants = new Tenants(fileStore(dataDir), {}, () => false, () => []);
+    const runtime = { control, auth, tenants, close: () => { tenants.close(); control.close(); } };
+    const app = createServerApp(runtime, cfg);
+
+    try {
+      // Normal asset in webDir/assets gets immutable caching
+      const resAsset = await app.request("/assets/app.123.js");
+      expect(resAsset.status).toBe(200);
+      expect(resAsset.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+
+      // Encoded dot-dot request (/assets/..%2fsecret.txt) returns 404 and never immutable caching
+      const resDotDot1 = await app.request("/assets/..%2fsecret.txt");
+      expect(resDotDot1.status).toBe(404);
+      expect(resDotDot1.headers.get("cache-control") ?? "").not.toContain("immutable");
+
+      // Regular file outside assets directory is not cached with immutable header
+      const resSecret = await app.request("/secret.txt");
+      expect(resSecret.status).toBe(200);
+      expect(resSecret.headers.get("cache-control")).not.toContain("immutable");
+    } finally {
+      runtime.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 404 for missing files with an extension while extensionless routes get index.html", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "concord-static-"));
+    const webDir = join(dir, "web");
+    const dataDir = join(dir, "data");
+    mkdirSync(join(webDir, "assets"), { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(join(webDir, "index.html"), "<html>shell</html>");
+    writeFileSync(join(webDir, "favicon.ico"), "fake-ico");
+
+    const cfg = loadConfig({
+      CONCORD_DATA_DIR: dataDir,
+      CONCORD_WEB_DIR: webDir,
+      CONCORD_SIGNUP: "open",
+    });
+    const control = new Db(join(dataDir, "control.db"), CONTROL_MIGRATIONS);
+    const auth = new Auth(control, { signup: "open" });
+    const tenants = new Tenants(fileStore(dataDir), {}, () => false, () => []);
+    const runtime = { control, auth, tenants, close: () => { tenants.close(); control.close(); } };
+    const app = createServerApp(runtime, cfg);
+
+    try {
+      // Existing file returns 200
+      const resFavicon = await app.request("/favicon.ico");
+      expect(resFavicon.status).toBe(200);
+
+      // Missing files with an extension return 404
+      const resMissingIco = await app.request("/missing-favicon.ico");
+      expect(resMissingIco.status).toBe(404);
+
+      const resMissingJs = await app.request("/a/b/c.js");
+      expect(resMissingJs.status).toBe(404);
+
+      const resMissingTxt = await app.request("/robots.txt");
+      expect(resMissingTxt.status).toBe(404);
+
+      // Extensionless route falls back to SPA index.html
+      const resSpa = await app.request("/a/abc/reconciliation");
+      expect(resSpa.status).toBe(200);
+      expect(await resSpa.text()).toBe("<html>shell</html>");
+    } finally {
+      runtime.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses dotfiles from web directory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "concord-static-"));
+    const webDir = join(dir, "web");
+    const dataDir = join(dir, "data");
+    mkdirSync(join(webDir, "assets"), { recursive: true });
+    mkdirSync(join(webDir, "a/.git"), { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+
+    writeFileSync(join(webDir, "index.html"), "<html>shell</html>");
+    writeFileSync(join(webDir, ".hidden"), "secret dotfile");
+    writeFileSync(join(webDir, "a/.git/config"), "secret git config");
+    writeFileSync(join(webDir, "assets/x.js"), "console.log('x');");
+
+    const cfg = loadConfig({
+      CONCORD_DATA_DIR: dataDir,
+      CONCORD_WEB_DIR: webDir,
+      CONCORD_SIGNUP: "open",
+    });
+    const control = new Db(join(dataDir, "control.db"), CONTROL_MIGRATIONS);
+    const auth = new Auth(control, { signup: "open" });
+    const tenants = new Tenants(fileStore(dataDir), {}, () => false, () => []);
+    const runtime = { control, auth, tenants, close: () => { tenants.close(); control.close(); } };
+    const app = createServerApp(runtime, cfg);
+
+    try {
+      // /.hidden and /a/.git/config return 404
+      const resDot = await app.request("/.hidden");
+      expect(resDot.status).toBe(404);
+
+      const resSubDot = await app.request("/a/.git/config");
+      expect(resSubDot.status).toBe(404);
+
+      // /assets/x.js still served
+      const resAsset = await app.request("/assets/x.js");
+      expect(resAsset.status).toBe(200);
+      expect(await resAsset.text()).toBe("console.log('x');");
+    } finally {
+      runtime.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });

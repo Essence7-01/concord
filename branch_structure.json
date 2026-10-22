@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/issue-921-recorded-horizon-accounts-pages-for-baseline",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/issue-921-recorded-horizon-accounts-pages-for-baseline": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/issue-921-recorded-horizon-accounts-pages-for-baseline",
+    "origin"
+  ]
+}

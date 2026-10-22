@@ -26,7 +26,7 @@ function generateEvents(): AssetEvent[] {
     const i = events.length;
     const ledger = 1 + Math.floor(i / 10);
     events.push({
-      id: String(i).padStart(20, "0"),
+      id: `${String(i).padStart(19, "0")}-0000000000`,
       assetId: "BENCH:ISSUER",
       ledger,
       closedAt: new Date(Date.UTC(2026, 0, 1) + ledger * 5000).toISOString(),

@@ -198,6 +198,7 @@ async function main(): Promise<void> {
       if (values.json) return out(action);
       console.log(`${action.label} · record ${action.recordTime} · ${action.state.toUpperCase()}`);
       if (action.result) {
+        for (const w of action.result.warnings) console.log(`  warning: ${w}`);
         console.table(action.result.summary);
         table(action.result.lines.map(({ txHashes: _, ...line }) => line));
       }

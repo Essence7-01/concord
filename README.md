@@ -11,8 +11,10 @@ manual. Concord does it from ledger events.
 corporate-actions engine, controls log and audit export run end to end behind sign-in, with a
 private workspace per organisation. It has been exercised against Stellar mainnet: watching
 Franklin Templeton's BENJI, Concord's unit total matched Horizon's own figure to the last decimal,
-and a register built from the chain's holdings reconciled clean across all 1,005 positions. No
+and a register built from the chain's holdings reconciled clean across all 1,005 positions (see
+reproduction steps in [`docs/evidence/benji-mainnet.md`](./docs/evidence/benji-mainnet.md)). No
 customer has used it. The product brief and kill criteria are in [`BRIEF.md`](./BRIEF.md).
+Questions, bug reports and what to expect back: [`SUPPORT.md`](./SUPPORT.md). Answers to common questions are in [`docs/FAQ.md`](./docs/FAQ.md).
 
 ## Run it
 
@@ -38,13 +40,15 @@ RPC endpoints, which suit light use. Point `CONCORD_MAINNET_RPC_URLS` at a provi
 more.
 
 Where the databases live, and what is safe to delete, is in
-[`docs/data-directory.md`](./docs/data-directory.md).
+[`docs/data-directory.md`](./docs/data-directory.md). What personal data Concord stores, where,
+how long it is kept and how to remove it is in [`docs/privacy.md`](./docs/privacy.md).
 
 ## Accounts and workspaces
 
 - A **workspace** holds the assets an organisation watches and the books it uploads. Each one is
   a SQLite file of its own under `data/orgs/`, so nothing a workspace stores can be reached from
-  another. Accounts, memberships and sessions live in `data/control.db`.
+  another. Accounts, memberships and sessions live in `data/control.db`. Why one file per
+  workspace: [`docs/adr/0001-sqlite-per-tenant.md`](./docs/adr/0001-sqlite-per-tenant.md).
 - People sign in with **email and password**, or with **Google** when
   `CONCORD_GOOGLE_CLIENT_ID` and `CONCORD_GOOGLE_CLIENT_SECRET` are set. Concord sends no email:
   an owner creates an invitation link and passes it on, and a forgotten password is reset with a
@@ -52,6 +56,7 @@ Where the databases live, and what is safe to delete, is in
   to configure Google or understand how it works with existing accounts, invitations and sign-up codes.
 - **Owners** invite and remove people, stop watching assets and can delete the workspace.
   **Members** do everything else. Whoever signs off a break is recorded from their session.
+  See the [roles and permissions matrix](./docs/roles.md) for endpoint-level capabilities and the last-owner protection rules.
 - `CONCORD_SIGNUP=open` lets anyone create a workspace. `CONCORD_SIGNUP=code` requires a code
   from `pnpm concord signup-code`.
   The [operator guide](./docs/operator-guide.md) covers codes, reset links and deleting a
@@ -85,21 +90,28 @@ The audit pack format (JSON sections, CSV columns, period rules and file names) 
 
 The [`Dockerfile`](./Dockerfile) builds one image that serves the API and the dashboard. Give it
 a volume at `/data`, put TLS in front (see [`docs/deploy/nginx.md`](./docs/deploy/nginx.md) for an
-nginx and Certbot recipe), and set `CONCORD_PUBLIC_URL` to the https address people open.
+nginx and Certbot recipe, or the [Caddy TLS recipe](docs/deploy/caddy.md) for automated Let's Encrypt
+certificates), and set `CONCORD_PUBLIC_URL` to the https address people open. For
+multi-container orchestrations, volumes, healthchecks, and upgrade procedures, see
+[Deploying with Docker Compose](docs/deploy/docker-compose.md).
 
 ```sh
 docker build -t concord .
 docker run -p 4400:4400 -v concord-data:/data -e CONCORD_PUBLIC_URL=https://concord.example.com concord
 ```
 
+For a long-running host, [`deploy/docker-compose.yml`](./deploy/docker-compose.yml) does the same
+with a named volume, a restart policy and the health check. Copy `.env.example` to `.env` at the
+repository root, then run `docker compose -f deploy/docker-compose.yml up -d --build` from there.
+
 Concord is a single process with a background indexer and SQLite files, so it needs one
-always-on instance with a local disk. It does not fit serverless hosts.
+always-on instance with a local disk. It does not fit serverless hosts. For operational logs, healthchecks, and indexer alerting, see [`docs/monitoring.md`](docs/monitoring.md).
 
 [`render.yaml`](./render.yaml) deploys it to Render's **free** plan for a preview. That plan has
 no persistent disk: every account, upload and sign-off is erased when the service restarts or
 spins down after fifteen idle minutes. `CONCORD_EPHEMERAL=1` makes the dashboard say so on every
 page. For anything people should come back to, use a paid instance with a disk at `/data` (or
-Fly.io, or a VPS with [nginx](./docs/deploy/nginx.md)) and remove that variable.
+[Fly.io](./docs/deploy/fly.md), or a VPS with [nginx](./docs/deploy/nginx.md) or [systemd](./docs/deploy/systemd.md)) and remove that variable.
 
 Before upgrading, read [`docs/versioning.md`](./docs/versioning.md): what a version number
 promises, what counts as breaking for the input files, the audit pack and the database, and why a
@@ -113,16 +125,22 @@ covered in [`docs/upgrading.md`](./docs/upgrading.md).
 | Path | What it is |
 |---|---|
 | `packages/core` | The accounting, with no I/O: holdings replay, position and movement reconciliation, entitlements, controls matching |
-| `services/api` | RPC indexer, SQLite stores, accounts and workspaces, HTTP API, CLI |
+| `services/api` | RPC indexer, SQLite stores, accounts and workspaces ([how they are isolated](./docs/tenancy.md)), HTTP API, CLI |
 | `apps/web` | Dashboard: sign-in, breaks and sign-off, holdings, corporate actions, controls log, audit export, team |
 
 The tables in `control.db` and in each workspace database are described in
-[`docs/schema.md`](./docs/schema.md).
+[`docs/schema.md`](./docs/schema.md). Core Stellar blockchain concepts (CAP-67, SEP-41, trustlines,
+authorisation flags, and baselines) are defined for finance and compliance readers in the
+[Stellar glossary](./docs/glossary-stellar.md).
+
+Architecture decisions are recorded as ADRs in [`docs/adr/`](./docs/adr/README.md): the index,
+the MADR-style template, the statuses, and when an ADR is required.
 
 ## Input files
 
 All CSV with a header row. Amounts are decimals in whole units; more precision than the asset
-carries is rejected, not rounded. Rows that cannot be read are listed with their line number and
+carries is rejected, not rounded (see [`docs/adr/0002-bigint-amounts.md`](./docs/adr/0002-bigint-amounts.md)).
+Rows that cannot be read are listed with their line number and
 the reason, and the rest of the file is loaded. Each import form offers a blank template.
 
 | File | Columns |
@@ -146,26 +164,34 @@ the reason, and the rest of the file is loaded. Each import form offers a blank 
 
 A break can be acknowledged or resolved with a note. The sign-off holds only while the figures it
 was written against are unchanged; if the break moves, it reopens. See
-[`docs/breaks.md`](./docs/breaks.md) for the complete break-type glossary, root causes, investigation
-steps, and sign-off lifecycle.
+[`docs/signoff.md`](./docs/signoff.md) for what a note is attached to, what the fingerprint captures
+per scope, and when a sign-off goes stale, and [`docs/breaks.md`](./docs/breaks.md) for the complete
+break-type glossary, root causes and investigation steps.
 
 A reconciliation runs when a register is imported and whenever someone re-runs it. Nothing
-reconciles on a timer: a new day's comparison needs that day's register.
+reconciles on a timer: a new day's comparison needs that day's register. See
+[`docs/reconciliation.md`](./docs/reconciliation.md) for event replay mechanics, omnibus aggregation,
+movement matching rules, and a worked numeric example producing every break type.
 
 ## Limits
+
+Which of these are next to fall, and what never will, is in
+[`docs/ROADMAP.md`](./docs/ROADMAP.md).
 
 - **History.** Stellar RPC keeps about seven days of events. A classic asset is therefore
   watched from opening balances: every trustline's balance from Horizon, then events from that
   ledger on. Horizon does not list balances held by liquidity pools, claimable balances or
   contracts, so opening balances understate supply by whatever those hold. Holdings before the
-  opening balances cannot be queried.
+  opening balances cannot be queried. For full architecture, retention rules, and timeline diagrams, see
+  [`docs/history-and-baselines.md`](docs/history-and-baselines.md).
 - **Contract tokens.** A SEP-41 token that is not the contract of a classic asset has no opening
   balances to read, so its holdings count only movements from the oldest ledger the RPC keeps.
   The dashboard says so on every page of such an asset. Tokens that do not emit the standard
   `set_authorized` and `clawback` events will show an empty controls log.
 - **Gaps.** If the indexer is down for longer than RPC retention, the events in between are
   lost. Concord detects this, stops indexing the asset and says why; **Rebuild history** in the
-  asset's settings starts it again from fresh opening balances and keeps the uploaded books.
+  asset's settings starts it again from fresh opening balances and keeps the uploaded books. See
+  [`docs/troubleshooting.md`](docs/troubleshooting.md) for every sync and indexing message explained.
 - **Decimals.** Classic assets carry seven. A contract token's are read from the contract; one
   that does not state them has to be told when it is watched.
 - **Email.** None is sent. Addresses are not verified at sign-up, invitations travel by link, and
@@ -209,7 +235,7 @@ source for every finding, the kill criteria and the re-check schedule are kept i
 |---|---|
 | Indexer | Read CAP-67 events for a watched set of regulated assets (classic and SEP-41) |
 | Reconciler | Match on-chain holdings and movements against each register export as it is imported, and on demand; flag breaks |
-| Corporate actions | Record-date snapshots; dividend, split and redemption reconciliation |
+| Corporate actions | Record-date snapshots; dividend, split and redemption reconciliation — see [`docs/corporate-actions.md`](./docs/corporate-actions.md) |
 | Controls log | Every freeze, authorisation change and clawback, tied to the instruction that caused it |
 | Audit export | Regulator- and auditor-ready reports |
 
@@ -225,15 +251,24 @@ software: per asset and per seat.
 ## Contributing
 
 Contributions are welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup and the
-rules that matter, and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for how the code fits
-together. To read the ledger from a new source, see
-[`docs/contributing/chain-source.md`](./docs/contributing/chain-source.md), and see [`docs/breaks.md`](./docs/breaks.md) for the break-type glossary. Report security problems
+rules that matter, [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for how the code fits
+together, [`docs/MAINTAINERS.md`](./docs/MAINTAINERS.md) for triage, merge and release rules, and [`docs/contributing/review-checklist.md`](./docs/contributing/review-checklist.md)
+for what reviewers check on every pull request. Front-end contributors should also read
+[`docs/contributing/web-dev.md`](./docs/contributing/web-dev.md) for running the dashboard locally against testnet or a fake chain.
+To read the ledger from a new source, see
+[`docs/contributing/chain-source.md`](./docs/contributing/chain-source.md), see [`docs/breaks.md`](./docs/breaks.md) for the break-type glossary, see [`docs/contributing/core-tests.md`](./docs/contributing/core-tests.md) for testing guidelines in `packages/core`, and see [`docs/accessibility.md`](./docs/accessibility.md) for our accessibility statement and conformance goals. To add a column to the register, journal or instructions CSV, see
+[`docs/contributing/csv-column.md`](./docs/contributing/csv-column.md). To add a database migration safely, see [`docs/contributing/migrations.md`](./docs/contributing/migrations.md). Looking for a place to start? See [`docs/contributing/good-first-issues.md`](./docs/contributing/good-first-issues.md) for how issues are labelled. For frequently asked questions, see [`docs/FAQ.md`](./docs/FAQ.md). For why the dashboard uses hash routing and is served from the API's origin, see [`docs/adr/0005-hash-routing-same-origin.md`](./docs/adr/0005-hash-routing-same-origin.md). The security model (trust boundaries, cookies, rate limits, what an operator can see) is in [`docs/SECURITY-MODEL.md`](./docs/SECURITY-MODEL.md). Report security problems
 privately, as described in [`SECURITY.md`](./SECURITY.md).
 Everyone taking part is expected to follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ## License
 
 [MIT](./LICENSE).
+
+## Changelog
+
+User-visible and schema changes are listed in [`CHANGELOG.md`](./CHANGELOG.md), Keep a
+Changelog format.
 
 ## Relationship to other projects
 
