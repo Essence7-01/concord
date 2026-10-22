@@ -39,6 +39,7 @@ jobs:
       # The API and the dashboard import packages/core from its build output, so build first.
       - run: pnpm build
       - run: pnpm typecheck
+      - run: pnpm lint
       - run: pnpm test
       # Second pass with randomised test order to expose inter-test coupling.
       # Replay a failing seed with: pnpm test --sequence.shuffle --sequence.seed=<seed>

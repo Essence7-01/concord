@@ -60,7 +60,7 @@ export function Events({ asset }: { asset: AssetSummary }) {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load is recreated on each render; query inputs (asset.id, kind, address) trigger fetch
   }, [asset.id, kind, address]);
 
   const stale = rows !== undefined && asset.syncedLedger !== readAt;
@@ -80,7 +80,12 @@ export function Events({ asset }: { asset: AssetSummary }) {
         </div>
         <div className="min-w-[260px] flex-1 md:max-w-xl">
           <Field label="Address">
-            <input value={typed} onChange={(e) => setTyped(e.target.value)} className={`${inputClass} num`} spellCheck={false} />
+            <input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              className={`${inputClass} num`}
+              spellCheck={false}
+            />
           </Field>
         </div>
         <Button busy={busy} onClick={() => void load()}>

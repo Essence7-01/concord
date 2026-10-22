@@ -5,7 +5,7 @@ import { nativeToScVal } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it } from "vitest";
 import { decodeEvent } from "../src/chain.js";
 import { USAGE } from "../src/cli-usage.js";
-import { Concord, NotFound } from "../src/concord.js";
+import { Concord, Invalid, NotFound } from "../src/concord.js";
 import { Db } from "../src/db.js";
 import { Client, FakeChain, PASSPHRASE, at, harness, key, u } from "./helpers.js";
 
@@ -51,8 +51,13 @@ describe("decodeEvent", () => {
     });
     expect(decodeEvent(raw([sym("mint"), addr(b), str(`FUND:${a}`)], i128(7n)))).toMatchObject({ to: b, amount: 7n });
     expect(decodeEvent(raw([sym("clawback"), addr(b), str(`FUND:${a}`)], i128(7n)))).toMatchObject({ from: b });
-    const auth = decodeEvent(raw([sym("set_authorized"), addr(b), str(`FUND:${a}`)], nativeToScVal(false).toXDR("base64")));
-    expect(auth).toMatchObject({ kind: "set_authorized", from: b, authorized: false, amount: 0n });
+    const authFalse = decodeEvent(raw([sym("set_authorized"), addr(b), str(`FUND:${a}`)], nativeToScVal(false).toXDR("base64")));
+    expect(authFalse).toMatchObject({ kind: "set_authorized", from: b, authorized: false, amount: 0n });
+    const authTrue = decodeEvent(raw([sym("set_authorized"), addr(b), str(`FUND:${a}`)], nativeToScVal(true).toXDR("base64")));
+    expect(authTrue).toMatchObject({ kind: "set_authorized", from: b, authorized: true, amount: 0n });
+    expect(decodeEvent(raw([sym("set_authorized"), addr(b), str(`FUND:${a}`)], str("false")))).toBeUndefined();
+    expect(decodeEvent(raw([sym("set_authorized"), addr(b), str(`FUND:${a}`)], i128(1n)))).toBeUndefined();
+    expect(decodeEvent(raw([sym("set_authorized"), addr(b), str(`FUND:${a}`)], nativeToScVal(undefined, { type: "void" }).toXDR("base64")))).toBeUndefined();
   });
 
   it("takes the subject from the last address when an admin leads, and reads muxed values", () => {
@@ -63,6 +68,15 @@ describe("decodeEvent", () => {
 
   it("ignores events outside the asset set", () => {
     expect(decodeEvent(raw([sym("approve"), addr(a), addr(b)], i128(1n)))).toBeUndefined();
+  });
+
+  it("returns undefined without throwing when ledgerClosedAt is unparseable", () => {
+    const invalidDateRaw = {
+      ...raw([sym("transfer"), addr(a), addr(b), str(`FUND:${a}`)], i128(5n)),
+      ledgerClosedAt: "garbage",
+    };
+    expect(() => decodeEvent(invalidDateRaw)).not.toThrow();
+    expect(decodeEvent(invalidDateRaw)).toBeUndefined();
   });
 });
 
@@ -220,6 +234,28 @@ describe("Concord", () => {
     expect((await concord.reconcileAction(split.id)).state).toBe("clean");
   });
 
+  it("rejects non-address payer and warns on a silent payer", async () => {
+    await expect(
+      concord.createAction("FUND", {
+        type: "dividend",
+        recordTime: at(5),
+        ratePerUnit: "0.1",
+        payer: "bogus payer",
+      }),
+    ).rejects.toThrow("payer must be a valid Stellar address");
+
+    const silentPayer = key();
+    const action = await concord.createAction("FUND", {
+      type: "dividend",
+      recordTime: at(5),
+      ratePerUnit: "0.1",
+      payer: silentPayer,
+    });
+    expect(action.result!.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining(`Payer ${silentPayer} has no recorded flows in the action window`)]),
+    );
+  });
+
   it("holds an action as scheduled until the chain passes its record time", async () => {
     const action = await concord.createAction("FUND", { type: "redemption", recordTime: at(150), num: "1", den: "1" });
     expect(action.state).toBe("scheduled");
@@ -228,6 +264,33 @@ describe("Concord", () => {
     const later = await concord.reconcileAction(action.id);
     expect(later.snapshot!.holderCount).toBe(3);
     expect(later.result!.breaks.map((b) => [b.type, b.address])).toEqual([["MISSING", h2]]);
+  });
+
+  it("refuses to snapshot when record time is earlier than history start on a baseline asset", async () => {
+    const other = key();
+    chain.latest = 200;
+    chain.baselineResult = {
+      ledger: 150,
+      openings: new Map([
+        [h1, { amount: u(70), authorized: true, asOfLedger: 150 }],
+        [h2, { amount: u(30), asOfLedger: 150 }],
+      ]),
+    };
+    const asset = await concord.watchAsset({ network: "testnet", asset: `OLD:${other}` });
+    chain.push(asset.id, "transfer", 151, { from: h1, to: h2, amount: u(5) });
+    await concord.sync("OLD");
+
+    const action = await concord.createAction("OLD", {
+      type: "dividend",
+      recordTime: at(100),
+      ratePerUnit: "1",
+    });
+    expect(action.snapshot).toBeNull();
+    expect(action.state).toBe("scheduled");
+    expect(action.result).not.toBeNull();
+    expect(action.result!.warnings).toEqual([
+      expect.stringContaining("earlier than history start"),
+    ]);
   });
 
   it("builds the controls log and the audit pack", async () => {
@@ -572,6 +635,29 @@ describe("Concord", () => {
     expect(concord.asset(assetId).id).toBe(assetId);
   });
 
+  it("validates decimals for classic and contract assets", async () => {
+    const classicIssuer = key();
+    // Classic asset rejects decimals !== 7
+    await expect(
+      concord.watchAsset({ network: "testnet", asset: `FAIL:${classicIssuer}`, decimals: 3, fromLedger: 1 }),
+    ).rejects.toThrow(new Invalid("classic assets always carry 7 decimals"));
+
+    // Classic asset accepts decimals === 7 and undefined
+    const c1 = await concord.watchAsset({ network: "testnet", asset: `OK1:${classicIssuer}`, decimals: 7, fromLedger: 1 });
+    expect(c1.decimals).toBe(7);
+    const c2 = await concord.watchAsset({ network: "testnet", asset: `OK2:${classicIssuer}`, fromLedger: 1 });
+    expect(c2.decimals).toBe(7);
+
+    // Contract token keeps existing 0 to 18 range check
+    const contractId = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+    await expect(
+      concord.watchAsset({ network: "testnet", asset: contractId, decimals: -1, fromLedger: 1 }),
+    ).rejects.toThrow(new Invalid("decimals must be 0 to 18"));
+    await expect(
+      concord.watchAsset({ network: "testnet", asset: contractId, decimals: 19, fromLedger: 1 }),
+    ).rejects.toThrow(new Invalid("decimals must be 0 to 18"));
+  });
+
   it("serves the same operations over HTTP, to a signed-in user", async () => {
     const h = harness();
     h.chain.baselineResult = { ledger: 50, openings: new Map() };
@@ -627,6 +713,27 @@ describe("Concord", () => {
 
 describe("documented input files", () => {
   const readme = readFileSync(fileURLToPath(new URL("../../../README.md", import.meta.url)), "utf8");
+
+  it("serves optional example rows and rejects unknown templates", async () => {
+    const client = await new Client(harness().app).signUp("templates@example.test", "Templates");
+    for (const kind of ["register", "journal", "instructions"]) {
+      const blank = await (await client.call(`/api/templates/${kind}.csv`)).text();
+      for (const example of ["1", "true"]) {
+        const res = await client.call(`/api/templates/${kind}?example=${example}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toContain("text/csv");
+        expect(res.headers.get("content-disposition")).toContain(`concord-${kind}-template.csv`);
+        const csv = await res.text();
+        expect(csv.startsWith(blank)).toBe(true);
+        expect(csv.trimEnd().split("\n")).toHaveLength(2);
+      }
+      const disabled = await client.call(`/api/templates/${kind}.csv?example=false`);
+      expect(await disabled.text()).toBe(blank);
+    }
+    for (const kind of ["unknown", "toString", "__proto__"]) {
+      expect((await client.call(`/api/templates/${kind}?example=1`)).status).toBe(404);
+    }
+  });
 
   /** The column names in one README Input-files row. Parenthesised value enumerations go. */
   function documentedColumns(row: string): string[] {

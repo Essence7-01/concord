@@ -16,6 +16,7 @@ pnpm install
 pnpm build        # builds packages/core first; the API and the dashboard import its output
 pnpm test         # unit and service tests, no network needed
 pnpm typecheck
+pnpm lint         # code quality and hook rules
 pnpm dev          # API and dashboard with reload, http://127.0.0.1:4400
 ```
 
@@ -36,14 +37,14 @@ at your own RPC provider.
 
 ## Where changes go
 
-| You are changing | Look in | Tests |
-|---|---|---|
-| How holdings, breaks, entitlements or controls are computed | `packages/core/src` | `packages/core/test/core.test.ts` |
-| Reading the ledger (RPC events, Horizon opening balances) | `services/api/src/chain.ts` | `services/api/test` |
-| Workspaces, sign-in, sessions, rate limits | `services/api/src/{auth,auth-api,tenants,security}.ts` | `services/api/test/tenancy.test.ts` |
-| HTTP routes, CLI, orchestration | `services/api/src/{api,cli,concord}.ts` | `services/api/test/service.test.ts` |
-| Database tables | `services/api/src/schema.ts` | add a migration, see below |
-| The dashboard | `apps/web/src` | none yet; check it in a browser |
+| You are changing                                            | Look in                                                | Tests                               |
+| ----------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------- |
+| How holdings, breaks, entitlements or controls are computed | `packages/core/src`                                    | `packages/core/test/core.test.ts`   |
+| Reading the ledger (RPC events, Horizon opening balances)   | `services/api/src/chain.ts`                            | `services/api/test`                 |
+| Workspaces, sign-in, sessions, rate limits                  | `services/api/src/{auth,auth-api,tenants,security}.ts` | `services/api/test/tenancy.test.ts` |
+| HTTP routes, CLI, orchestration                             | `services/api/src/{api,cli,concord}.ts`                | `services/api/test/service.test.ts` |
+| Database tables                                             | `services/api/src/schema.ts`                           | add a migration, see below          |
+| The dashboard                                               | `apps/web/src`                                         | none yet; check it in a browser     |
 
 ### Where the tests live
 
@@ -80,7 +81,7 @@ at your own RPC provider.
 1. For anything larger than a small fix, open an issue first so we can agree on the approach.
 2. Branch from `main`. Keep one concern per pull request.
 3. Add or update tests with the change. A bug fix should come with a test that fails without it.
-4. Run `pnpm build && pnpm test && pnpm typecheck` before you push. CI runs the same.
+4. Run `pnpm build && pnpm test && pnpm typecheck && pnpm lint` before you push. CI runs the same.
 5. Open the pull request and fill in the template. Link the issue it closes.
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/). Use one of
@@ -94,6 +95,11 @@ Types in use are `feat`, `fix`, `docs`, `build`, `test` and `chore`. Examples:
 `fix(core): ...`, `feat(api): ...`, `feat(web): ...`, `test(api): ...`. `docs:`, `build:` and
 `chore:` take no scope when they cover the whole repository. Keep the subject short and say why in
 the body when it is not obvious.
+
+If the change is user-visible or touches a schema (`CONTROL_MIGRATIONS` or `ORG_MIGRATIONS` in
+`services/api/src/schema.ts`), add a line to the `Unreleased` section of
+[`CHANGELOG.md`](./CHANGELOG.md) in the same pull request; that file says how commit types map
+to sections. Internal refactorings and docs-only changes need no entry.
 
 ## Adding a break type
 
