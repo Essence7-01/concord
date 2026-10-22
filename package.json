@@ -1,6 +1,7 @@
 {
   "name": "concord",
   "private": true,
+  "type": "module",
   "license": "MIT",
   "description": "Reconciliation between tokenized securities on Stellar and the official register.",
   "engines": {
@@ -9,19 +10,26 @@
   },
   "packageManager": "pnpm@10.22.0",
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "node api.js && pnpm -r build",
+    "lint": "eslint .",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "e2e": "pnpm build && pnpm --filter @concord/web e2e",
-    "dev": "pnpm --parallel --filter @concord/api --filter @concord/web dev",
-    "start": "pnpm --filter @concord/api start",
+    "dev": "node api.js && pnpm --parallel --filter @concord/api --filter @concord/web dev",
+    "start": "node api.js && pnpm --filter @concord/api start",
     "concord": "pnpm --silent --filter @concord/api cli",
     "demo:testnet": "pnpm --filter @concord/api demo:testnet"
   },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.10",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.71.2"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
