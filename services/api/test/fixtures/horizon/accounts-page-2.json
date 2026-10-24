@@ -1,0 +1,24 @@
+{
+  "_links": {
+    "self": { "href": "https://horizon.stellar.org/accounts?cursor=GBQ2ZT4YBRXOPVCUHXBKX7EHQFFHNZ7GHBA6M2RYIJ2DBPSAPJH5B3QK&limit=200&order=asc" },
+    "next": { "href": "https://horizon.stellar.org/accounts?cursor=GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL3RATMSIHDXL6HKY6BYPP4SJAI5M&limit=200&order=asc" }
+  },
+  "_embedded": {
+    "records": [
+      {
+        "id": "GCABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV",
+        "account_id": "GCABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV",
+        "sequence": "55555555555555",
+        "subentry_count": 1,
+        "home_domain": "treasury.test",
+        "last_modified_ledger": 51200144,
+        "balances": [
+          { "balance": "9000.0000000", "asset_type": "native" },
+          { "balance": "12.0000000", "asset_type": "credit_alphanum4", "asset_code": "USDC", "asset_issuer": "GBBD47IF6LWK7P7MDEVSLRV6FCXO4J6M3ZBJWVSC4Q7UZ7ZCXKQ4Q4ZT", "is_authorized": true, "is_authorized_to_maintain_liabilities": true, "limit": "100000.0000000" }
+        ],
+        "flags": { "auth_required": true, "auth_revocable": true, "auth_immutable": false, "auth_clawback_enabled": true },
+        "_links": { "self": { "href": "https://horizon.stellar.org/accounts/GCABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV" } }
+      }
+    ]
+  }
+}

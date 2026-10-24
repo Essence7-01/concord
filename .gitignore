@@ -1,5 +1,4 @@
 node_modules/
-.env*
 !.env.example
 target/
 dist/
@@ -9,3 +8,4 @@ data/
 *.tsbuildinfo
 test-results/
 playwright-report/
+config.bat

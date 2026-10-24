@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readFileSync as readFixture } from "node:fs";
 import { StrKey } from "@stellar/stellar-sdk";
 import { Auth } from "../src/auth.js";
 import { StellarSource } from "../src/chain.js";

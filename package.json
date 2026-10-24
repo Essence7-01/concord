@@ -10,13 +10,13 @@
   },
   "packageManager": "pnpm@10.22.0",
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "node init && pnpm -r build",
     "lint": "eslint .",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "e2e": "pnpm build && pnpm --filter @concord/web e2e",
-    "dev": "pnpm --parallel --filter @concord/api --filter @concord/web dev",
-    "start": "pnpm --filter @concord/api start",
+    "dev": "node init && pnpm --parallel --filter @concord/api --filter @concord/web dev",
+    "start": "node init && pnpm --filter @concord/api start",
     "concord": "pnpm --silent --filter @concord/api cli",
     "demo:testnet": "pnpm --filter @concord/api demo:testnet"
   },
