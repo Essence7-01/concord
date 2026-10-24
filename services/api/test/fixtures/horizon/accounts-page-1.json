@@ -1,0 +1,39 @@
+{
+  "_links": {
+    "self": { "href": "https://horizon.stellar.org/accounts?limit=200&order=asc" },
+    "next": { "href": "https://horizon.stellar.org/accounts?cursor=GBQ2ZT4YBRXOPVCUHXBKX7EHQFFHNZ7GHBA6M2RYIJ2DBPSAPJH5B3QK&limit=200&order=asc" }
+  },
+  "_embedded": {
+    "records": [
+      {
+        "id": "GAAAVZVS2SH3LPLZVXHXCBBDEIH7XOG46HWQBUAOQXOJ2X6PNWSPQJYA",
+        "account_id": "GAAAVZVS2SH3LPLZVXHXCBBDEIH7XOG46HWQBUAOQXOJ2X6PNWSPQJYA",
+        "sequence": "1234567890123",
+        "subentry_count": 2,
+        "home_domain": "example-issuer.test",
+        "last_modified_ledger": 51200101,
+        "balances": [
+          { "balance": "100.0000000", "asset_type": "native" },
+          { "balance": "250.5000000", "asset_type": "credit_alphanum4", "asset_code": "USDC", "asset_issuer": "GBBD47IF6LWK7P7MDEVSLRV6FCXO4J6M3ZBJWVSC4Q7UZ7ZCXKQ4Q4ZT", "is_authorized": true, "is_authorized_to_maintain_liabilities": true, "limit": "1000.0000000" }
+        ],
+        "flags": { "auth_required": false, "auth_revocable": false, "auth_immutable": false, "auth_clawback_enabled": false },
+        "_links": { "self": { "href": "https://horizon.stellar.org/accounts/GAAAVZVS2SH3LPLZVXHXCBBDEIH7XOG46HWQBUAOQXOJ2X6PNWSPQJYA" } }
+      },
+      {
+        "id": "GBAAB3YJ3CJ7NHCAKGBOQYJPTNS3XZCGG4VBXZCPNRZDCNOCWQZZLHRR",
+        "account_id": "GBAAB3YJ3CJ7NHCAKGBOQYJPTNS3XZCGG4VBXZCPNRZDCNOCWQZZLHRR",
+        "sequence": "987654321000",
+        "subentry_count": 3,
+        "home_domain": null,
+        "last_modified_ledger": 51200087,
+        "balances": [
+          { "balance": "42.1000000", "asset_type": "native" },
+          { "balance": "0.0000000", "asset_type": "credit_alphanum12", "asset_code": "MOBRIDGE01", "asset_issuer": "GCDNJUBQSX7AJWLJACMJ7I4BC3Z47BQUTMHEICZLE6MU4KQBRYG5JY6B", "is_authorized": false, "is_authorized_to_maintain_liabilities": false, "limit": "5000.0000000" },
+          { "balance": "75.2500000", "asset_type": "credit_alphanum4", "asset_code": "EURT", "asset_issuer": "GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX", "is_authorized": true, "is_authorized_to_maintain_liabilities": true, "limit": "500.0000000" }
+        ],
+        "flags": { "auth_required": true, "auth_revocable": true, "auth_immutable": false, "auth_clawback_enabled": false },
+        "_links": { "self": { "href": "https://horizon.stellar.org/accounts/GBAAB3YJ3CJ7NHCAKGBOQYJPTNS3XZCGG4VBXZCPNRZDCNOCWQZZLHRR" } }
+      }
+    ]
+  }
+}
